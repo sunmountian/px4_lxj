@@ -20,7 +20,19 @@ RUN_LOG_DIR = Path('/home/lixj/proj/px4_attack_runs')
 ULOG_ROOT = PX4_ROOT / 'build' / 'px4_sitl_default' / 'tmp' / 'rootfs' / 'log'
 
 
-def command_long(master, command, params, retries=3):
+VELOCITY_TYPE_MASK = (
+    mavutil.mavlink.POSITION_TARGET_TYPEMASK_X_IGNORE |
+    mavutil.mavlink.POSITION_TARGET_TYPEMASK_Y_IGNORE |
+    mavutil.mavlink.POSITION_TARGET_TYPEMASK_Z_IGNORE |
+    mavutil.mavlink.POSITION_TARGET_TYPEMASK_AX_IGNORE |
+    mavutil.mavlink.POSITION_TARGET_TYPEMASK_AY_IGNORE |
+    mavutil.mavlink.POSITION_TARGET_TYPEMASK_AZ_IGNORE |
+    mavutil.mavlink.POSITION_TARGET_TYPEMASK_YAW_IGNORE |
+    mavutil.mavlink.POSITION_TARGET_TYPEMASK_YAW_RATE_IGNORE
+)
+
+
+def command_long(master, command, params, retries=3, timeout=5):
     for _ in range(retries):
         master.mav.command_long_send(
             master.target_system,
@@ -29,7 +41,7 @@ def command_long(master, command, params, retries=3):
             0,
             *params,
         )
-        ack = master.recv_match(type='COMMAND_ACK', blocking=True, timeout=5)
+        ack = master.recv_match(type='COMMAND_ACK', blocking=True, timeout=timeout)
 
         if ack is not None and ack.command == command:
             return ack
@@ -37,13 +49,13 @@ def command_long(master, command, params, retries=3):
     return None
 
 
-def request_local_position(master, rate_hz):
+def request_message(master, message_id, rate_hz):
     master.mav.command_long_send(
         master.target_system,
         master.target_component,
         mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
         0,
-        mavutil.mavlink.MAVLINK_MSG_ID_LOCAL_POSITION_NED,
+        message_id,
         int(1_000_000 / rate_hz),
         0,
         0,
@@ -53,9 +65,38 @@ def request_local_position(master, rate_hz):
     )
 
 
+def send_velocity_setpoint(master, vn, ve, vd):
+    master.mav.set_position_target_local_ned_send(
+        int(time.monotonic() * 1000) & 0xffffffff,
+        master.target_system,
+        master.target_component,
+        mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+        VELOCITY_TYPE_MASK,
+        0,
+        0,
+        0,
+        vn,
+        ve,
+        vd,
+        0,
+        0,
+        0,
+        0,
+        0,
+    )
+
+
+def set_px4_mode(master, mode):
+    mode_flag, main_mode, sub_mode = mavutil.px4_map[mode]
+    return command_long(
+        master,
+        mavutil.mavlink.MAV_CMD_DO_SET_MODE,
+        [mode_flag, main_mode, sub_mode, 0, 0, 0, 0],
+    )
+
+
 def wait_stable_hover(master, target_altitude_m, stable_seconds, timeout_s):
     stable_since = None
-    first_stable_time = None
     deadline = time.monotonic() + timeout_s
 
     while time.monotonic() < deadline:
@@ -71,7 +112,6 @@ def wait_stable_hover(master, target_altitude_m, stable_seconds, timeout_s):
         if stable:
             if stable_since is None:
                 stable_since = time.monotonic()
-                first_stable_time = stable_since
 
             if time.monotonic() - stable_since >= stable_seconds:
                 return {
@@ -81,14 +121,84 @@ def wait_stable_hover(master, target_altitude_m, stable_seconds, timeout_s):
                     'vx': float(msg.vx),
                     'vy': float(msg.vy),
                     'vz': float(msg.vz),
-                    'first_stable_elapsed_s': first_stable_time,
                 }
 
         else:
             stable_since = None
-            first_stable_time = None
 
     raise TimeoutError('stable hover was not detected before timeout')
+
+
+def stream_velocity_until_stable(master, vn, ve, vd, stable_seconds, timeout_s, rate_hz):
+    stable_since = None
+    deadline = time.monotonic() + timeout_s
+    next_send = 0.0
+    last_msg = None
+
+    while time.monotonic() < deadline:
+        now = time.monotonic()
+
+        if now >= next_send:
+            send_velocity_setpoint(master, vn, ve, vd)
+            next_send = now + 1.0 / rate_hz
+
+        msg = master.recv_match(type='LOCAL_POSITION_NED', blocking=True, timeout=0.05)
+
+        if msg is None:
+            continue
+
+        last_msg = msg
+        vel_error = math.sqrt((float(msg.vx) - vn) ** 2 + (float(msg.vy) - ve) ** 2 + (float(msg.vz) - vd) ** 2)
+        stable = vel_error < 0.25
+
+        if stable:
+            if stable_since is None:
+                stable_since = time.monotonic()
+
+            if time.monotonic() - stable_since >= stable_seconds:
+                return {
+                    'x': float(msg.x),
+                    'y': float(msg.y),
+                    'z': float(msg.z),
+                    'vx': float(msg.vx),
+                    'vy': float(msg.vy),
+                    'vz': float(msg.vz),
+                }
+
+        else:
+            stable_since = None
+
+    raise TimeoutError(f'constant velocity was not stable before timeout, last_msg={last_msg}')
+
+
+def stream_velocity_for(master, vn, ve, vd, duration_s, rate_hz):
+    deadline = time.monotonic() + duration_s
+    next_send = 0.0
+    last_msg = None
+
+    while time.monotonic() < deadline:
+        now = time.monotonic()
+
+        if now >= next_send:
+            send_velocity_setpoint(master, vn, ve, vd)
+            next_send = now + 1.0 / rate_hz
+
+        msg = master.recv_match(type='LOCAL_POSITION_NED', blocking=True, timeout=0.05)
+
+        if msg is not None:
+            last_msg = msg
+
+    if last_msg is None:
+        return None
+
+    return {
+        'x': float(last_msg.x),
+        'y': float(last_msg.y),
+        'z': float(last_msg.z),
+        'vx': float(last_msg.vx),
+        'vy': float(last_msg.vy),
+        'vz': float(last_msg.vz),
+    }
 
 
 def latest_ulog_after(start_time):
@@ -139,6 +249,7 @@ def summarize_ulog(path):
     estimator_status = get_dataset('estimator_status')
     ratios = get_dataset('estimator_innovation_test_ratios')
     local_position = get_dataset('vehicle_local_position')
+    local_groundtruth = get_dataset('vehicle_local_position_groundtruth')
     gps = get_dataset('vehicle_gps_position')
 
     if estimator_status is not None:
@@ -162,6 +273,34 @@ def summarize_ulog(path):
             field: float(values(local_position, field)[-1])
             for field in ['x', 'y', 'z', 'vx', 'vy', 'vz']
         }
+
+    if local_groundtruth is not None:
+        result['local_groundtruth_last'] = {
+            field: float(values(local_groundtruth, field)[-1])
+            for field in ['x', 'y', 'z', 'vx', 'vy', 'vz']
+        }
+
+    if local_position is not None and local_groundtruth is not None:
+        t_est = values(local_position, 'timestamp')
+        t_gt = values(local_groundtruth, 'timestamp')
+        x_est = values(local_position, 'x')
+        y_est = values(local_position, 'y')
+        z_est = values(local_position, 'z')
+        vx_est = values(local_position, 'vx')
+        vy_est = values(local_position, 'vy')
+        vz_est = values(local_position, 'vz')
+        x_gt = np.interp(t_est, t_gt, values(local_groundtruth, 'x'))
+        y_gt = np.interp(t_est, t_gt, values(local_groundtruth, 'y'))
+        z_gt = np.interp(t_est, t_gt, values(local_groundtruth, 'z'))
+        vx_gt = np.interp(t_est, t_gt, values(local_groundtruth, 'vx'))
+        vy_gt = np.interp(t_est, t_gt, values(local_groundtruth, 'vy'))
+        vz_gt = np.interp(t_est, t_gt, values(local_groundtruth, 'vz'))
+        horizontal_error = np.hypot(x_est - x_gt, y_est - y_gt)
+        vertical_error = np.abs(z_est - z_gt)
+        velocity_error = np.sqrt((vx_est - vx_gt) ** 2 + (vy_est - vy_gt) ** 2 + (vz_est - vz_gt) ** 2)
+        result['estimator_groundtruth_horizontal_error'] = stat(horizontal_error)
+        result['estimator_groundtruth_vertical_error'] = stat(vertical_error)
+        result['estimator_groundtruth_velocity_error'] = stat(velocity_error)
 
     if gps is not None:
         lat = values(gps, 'lat') * 1e-7
@@ -204,25 +343,32 @@ def terminate_process(process):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Run a stable-hover PX4 SITL steady attack experiment.')
+    parser = argparse.ArgumentParser(description='Run a PX4 SITL constant-velocity steady attack experiment.')
     parser.add_argument('--mode', choices=['baseline', 'gps-only', 'gps-accel'], default='gps-accel')
+    parser.add_argument('--vn', type=float, default=1.0)
+    parser.add_argument('--ve', type=float, default=0.0)
+    parser.add_argument('--vd', type=float, default=0.0)
     parser.add_argument('--north', type=float, default=5.0)
     parser.add_argument('--east', type=float, default=0.0)
     parser.add_argument('--down', type=float, default=0.0)
     parser.add_argument('--ramp', type=float, default=30.0)
     parser.add_argument('--takeoff-altitude', type=float, default=10.0)
-    parser.add_argument('--stable-seconds', type=float, default=5.0)
-    parser.add_argument('--hover-timeout', type=float, default=90.0)
-    parser.add_argument('--attack-duration', type=float, default=80.0)
+    parser.add_argument('--hover-stable-seconds', type=float, default=3.0)
+    parser.add_argument('--cruise-stable-seconds', type=float, default=5.0)
+    parser.add_argument('--hover-timeout', type=float, default=120.0)
+    parser.add_argument('--cruise-timeout', type=float, default=60.0)
+    parser.add_argument('--attack-duration', type=float, default=60.0)
     parser.add_argument('--url', default='udpin:0.0.0.0:14540')
+    parser.add_argument('--setpoint-rate', type=float, default=20.0)
     parser.add_argument('--local-position-rate', type=float, default=20.0)
-    parser.add_argument('--preflight-wait', type=float, default=15.0)
+    parser.add_argument('--preflight-wait', type=float, default=25.0)
+    parser.add_argument('--skip-land', action='store_true', help='terminate SITL immediately after the attack window')
     args = parser.parse_args()
 
     RUN_LOG_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = time.strftime('%Y%m%d_%H%M%S')
-    run_log = RUN_LOG_DIR / f'steady_{args.mode}_{timestamp}.log'
-    trigger_file = Path(f'/tmp/px4_steady_attack_{os.getpid()}.trigger')
+    run_log = RUN_LOG_DIR / f'constant_velocity_{args.mode}_{timestamp}.log'
+    trigger_file = Path(f'/tmp/px4_constant_velocity_attack_{os.getpid()}.trigger')
 
     if trigger_file.exists():
         trigger_file.unlink()
@@ -234,7 +380,7 @@ def main():
 
     if args.mode != 'baseline':
         env['PX4_STEADY_ATTACK_ENABLE'] = '1'
-        env['PX4_STEADY_ATTACK_SCENARIO'] = 'hover'
+        env['PX4_STEADY_ATTACK_SCENARIO'] = 'constant_velocity'
         env['PX4_STEADY_ATTACK_TRIGGER_FILE'] = str(trigger_file)
         env['PX4_STEADY_ATTACK_NORTH_M'] = str(args.north)
         env['PX4_STEADY_ATTACK_EAST_M'] = str(args.east)
@@ -249,6 +395,9 @@ def main():
         env['PX4_STEADY_ATTACK_BARO'] = '0'
 
     start_wall_time = time.time()
+    hover_state = None
+    cruise_state = None
+    final_attack_state = None
 
     with run_log.open('w', encoding='utf-8') as log_file:
         process = subprocess.Popen(
@@ -263,27 +412,52 @@ def main():
         )
 
         try:
-            # Pipe commander takeoff via stdin (proven to work in this setup)
             time.sleep(args.preflight_wait)
+            process.stdin.write('param set COM_RCL_EXCEPT 7\n')
             process.stdin.write('commander takeoff\n')
             process.stdin.flush()
 
-            # Also connect MAVLink for telemetry and stable hover detection
             master = mavutil.mavlink_connection(args.url, autoreconnect=True)
             master.wait_heartbeat(timeout=60)
-            request_local_position(master, args.local_position_rate)
+            request_message(master, mavutil.mavlink.MAVLINK_MSG_ID_LOCAL_POSITION_NED, args.local_position_rate)
 
-            hover_state = wait_stable_hover(master, args.takeoff_altitude, args.stable_seconds, args.hover_timeout)
-            trigger_time = None
+            hover_state = wait_stable_hover(master, args.takeoff_altitude, args.hover_stable_seconds, args.hover_timeout)
+
+            for _ in range(int(args.setpoint_rate)):
+                send_velocity_setpoint(master, args.vn, args.ve, args.vd)
+                time.sleep(1.0 / args.setpoint_rate)
+
+            ack = set_px4_mode(master, 'OFFBOARD')
+
+            if ack is None or ack.result not in [mavutil.mavlink.MAV_RESULT_ACCEPTED, mavutil.mavlink.MAV_RESULT_IN_PROGRESS]:
+                raise RuntimeError(f'OFFBOARD mode command was not accepted: {ack}')
+
+            cruise_state = stream_velocity_until_stable(
+                master,
+                args.vn,
+                args.ve,
+                args.vd,
+                args.cruise_stable_seconds,
+                args.cruise_timeout,
+                args.setpoint_rate,
+            )
 
             if args.mode != 'baseline':
                 trigger_file.write_text('trigger\n', encoding='utf-8')
-                trigger_time = time.time()
 
-            time.sleep(args.attack_duration)
-            process.stdin.write('commander land\n')
-            process.stdin.flush()
-            time.sleep(5)
+            final_attack_state = stream_velocity_for(
+                master,
+                args.vn,
+                args.ve,
+                args.vd,
+                args.attack_duration,
+                args.setpoint_rate,
+            )
+
+            if not args.skip_land:
+                stream_velocity_for(master, 0.0, 0.0, 0.0, 3.0, args.setpoint_rate)
+                set_px4_mode(master, 'LAND')
+                time.sleep(5)
 
         finally:
             terminate_process(process)
@@ -297,6 +471,9 @@ def main():
     print(f'run_log={run_log}')
     print(f'ulog={ulog}')
     print(f'mode={args.mode}')
+    print(f'hover_state={hover_state}')
+    print(f'cruise_state={cruise_state}')
+    print(f'final_attack_state={final_attack_state}')
 
     if args.mode != 'baseline':
         print(f'trigger_file={trigger_file}')

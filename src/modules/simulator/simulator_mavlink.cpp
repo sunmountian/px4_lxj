@@ -111,6 +111,17 @@ bool steady_attack_hover()
 	return scenario == nullptr || std::strcmp(scenario, "hover") == 0;
 }
 
+bool steady_attack_constant_velocity()
+{
+	const char *scenario = std::getenv("PX4_STEADY_ATTACK_SCENARIO");
+	return scenario != nullptr && std::strcmp(scenario, "constant_velocity") == 0;
+}
+
+bool steady_attack_supported_scenario()
+{
+	return steady_attack_hover() || steady_attack_constant_velocity();
+}
+
 float steady_attack_float(const char *name, float default_value)
 {
 	const char *value = std::getenv(name);
@@ -171,7 +182,11 @@ struct SteadyAttackState {
 	hrt_abstime active_start_us{0};
 	float latest_yaw_rad{0.f};
 	bool latest_yaw_valid{false};
+	bool latest_attitude_valid{false};
+	float latest_q[4] {1.f, 0.f, 0.f, 0.f};
 	bool reference_locked{false};
+	float fake_yaw_rad{0.f};
+	float fake_q[4] {1.f, 0.f, 0.f, 0.f};
 	bool latest_mag_valid{false};
 	float latest_mag_x{0.f};
 	float latest_mag_y{0.f};
@@ -183,6 +198,9 @@ struct SteadyAttackState {
 	int32_t latest_gps_lon{0};
 	int32_t latest_gps_alt{0};
 	int32_t latest_gps_alt_ellipsoid{0};
+	float latest_gps_vel_n_m_s{0.f};
+	float latest_gps_vel_e_m_s{0.f};
+	float latest_gps_vel_d_m_s{0.f};
 	float fake_mag_x{0.f};
 	float fake_mag_y{0.f};
 	float fake_mag_z{0.f};
@@ -191,6 +209,9 @@ struct SteadyAttackState {
 	int32_t fake_gps_ref_lon{0};
 	int32_t fake_gps_ref_alt{0};
 	int32_t fake_gps_ref_alt_ellipsoid{0};
+	float fake_gps_ref_vel_n_m_s{0.f};
+	float fake_gps_ref_vel_e_m_s{0.f};
+	float fake_gps_ref_vel_d_m_s{0.f};
 };
 
 SteadyAttackState &steady_attack_state()
@@ -214,7 +235,7 @@ bool steady_attack_triggered()
 
 bool steady_attack_active(hrt_abstime now_us)
 {
-	if (!steady_attack_enabled() || !steady_attack_hover()) {
+	if (!steady_attack_enabled() || !steady_attack_supported_scenario()) {
 		return false;
 	}
 
@@ -230,7 +251,7 @@ bool steady_attack_active(hrt_abstime now_us)
 		if (steady_attack_triggered() && steady_attack_lock_reference()) {
 			state.active = true;
 			state.active_start_us = now_us;
-			PX4_INFO("steady hover replacement sensor injection triggered");
+			PX4_INFO("steady replacement sensor injection triggered");
 		}
 
 		return state.active;
@@ -247,7 +268,7 @@ bool steady_attack_active(hrt_abstime now_us)
 	if (elapsed_s >= delay_s && steady_attack_lock_reference()) {
 		state.active = true;
 		state.active_start_us = now_us;
-		PX4_INFO("steady hover replacement sensor injection enabled");
+		PX4_INFO("steady replacement sensor injection enabled");
 	}
 
 	return state.active;
@@ -303,6 +324,9 @@ void steady_attack_cache_gps_reference(const sensor_gps_s &gps)
 	state.latest_gps_lon = gps.lon;
 	state.latest_gps_alt = gps.alt;
 	state.latest_gps_alt_ellipsoid = gps.alt_ellipsoid;
+	state.latest_gps_vel_n_m_s = gps.vel_n_m_s;
+	state.latest_gps_vel_e_m_s = gps.vel_e_m_s;
+	state.latest_gps_vel_d_m_s = gps.vel_d_m_s;
 	state.latest_gps_valid = true;
 }
 
@@ -314,8 +338,14 @@ bool steady_attack_lock_reference()
 		return true;
 	}
 
-	if (!state.latest_mag_valid || !state.latest_baro_valid || !state.latest_gps_valid) {
+	if (!state.latest_attitude_valid || !state.latest_mag_valid || !state.latest_baro_valid || !state.latest_gps_valid) {
 		return false;
+	}
+
+	state.fake_yaw_rad = state.latest_yaw_valid ? state.latest_yaw_rad : 0.f;
+
+	for (int i = 0; i < 4; i++) {
+		state.fake_q[i] = state.latest_q[i];
 	}
 
 	state.fake_mag_x = state.latest_mag_x;
@@ -326,6 +356,9 @@ bool steady_attack_lock_reference()
 	state.fake_gps_ref_lon = state.latest_gps_lon;
 	state.fake_gps_ref_alt = state.latest_gps_alt;
 	state.fake_gps_ref_alt_ellipsoid = state.latest_gps_alt_ellipsoid;
+	state.fake_gps_ref_vel_n_m_s = state.latest_gps_vel_n_m_s;
+	state.fake_gps_ref_vel_e_m_s = state.latest_gps_vel_e_m_s;
+	state.fake_gps_ref_vel_d_m_s = state.latest_gps_vel_d_m_s;
 	state.reference_locked = true;
 	return true;
 }
@@ -337,8 +370,13 @@ void update_steady_attack_yaw(const mavlink_hil_state_quaternion_t &hil_state)
 	const float qy = hil_state.attitude_quaternion[2];
 	const float qz = hil_state.attitude_quaternion[3];
 	SteadyAttackState &state = steady_attack_state();
+	state.latest_q[0] = qw;
+	state.latest_q[1] = qx;
+	state.latest_q[2] = qy;
+	state.latest_q[3] = qz;
 	state.latest_yaw_rad = atan2f(2.f * (qw * qz + qx * qy), 1.f - 2.f * (qy * qy + qz * qz));
 	state.latest_yaw_valid = PX4_ISFINITE(state.latest_yaw_rad);
+	state.latest_attitude_valid = state.latest_yaw_valid;
 }
 
 void apply_steady_hover_imu(mavlink_hil_sensor_t &imu, hrt_abstime now_us)
@@ -351,14 +389,14 @@ void apply_steady_hover_imu(mavlink_hil_sensor_t &imu, hrt_abstime now_us)
 
 	SteadyAttackState &state = steady_attack_state();
 	const SteadyAttackProfile profile = steady_attack_profile(now_us);
-	const float yaw = state.latest_yaw_valid ? state.latest_yaw_rad : 0.f;
-	const float cy = cosf(yaw);
-	const float sy = sinf(yaw);
 
 	if (steady_attack_flag("PX4_STEADY_ATTACK_ACCEL", true)) {
-		imu.xacc = cy * profile.delta_a_n + sy * profile.delta_a_e;
-		imu.yacc = -sy * profile.delta_a_n + cy * profile.delta_a_e;
-		imu.zacc = -CONSTANTS_ONE_G + profile.delta_a_d;
+		const matrix::Quatf q_fake(state.fake_q);
+		const matrix::Vector3f accel_bias_earth(profile.delta_a_n, profile.delta_a_e, profile.delta_a_d);
+		const matrix::Vector3f accel_bias_body = q_fake.rotateVectorInverse(accel_bias_earth);
+		imu.xacc += accel_bias_body(0);
+		imu.yacc += accel_bias_body(1);
+		imu.zacc += accel_bias_body(2);
 		imu.fields_updated |= static_cast<uint32_t>(SensorSource::ACCEL);
 	}
 
@@ -379,7 +417,7 @@ void apply_steady_hover_imu(mavlink_hil_sensor_t &imu, hrt_abstime now_us)
 	if (steady_attack_flag("PX4_STEADY_ATTACK_BARO", true) && state.latest_baro_valid) {
 		const float delta_alt_m = -profile.down_m;
 		const float pressure_scale = powf(math::max(0.1f, 1.f - delta_alt_m / 44330.f), 5.255f);
-		imu.abs_pressure = state.fake_baro_pressure_hpa * pressure_scale;
+		imu.abs_pressure *= pressure_scale;
 		imu.fields_updated |= static_cast<uint32_t>(SensorSource::BARO);
 	}
 }
@@ -402,22 +440,24 @@ void apply_steady_hover_gps(sensor_gps_s &gps, hrt_abstime now_us)
 	static constexpr double earth_radius_m = 6378137.0;
 	static constexpr double deg_to_rad = 3.14159265358979323846 / 180.0;
 	static constexpr double rad_to_deg = 180.0 / 3.14159265358979323846;
-	const double ref_lat_deg = static_cast<double>(state.fake_gps_ref_lat) * 1e-7;
-	const double ref_lon_deg = static_cast<double>(state.fake_gps_ref_lon) * 1e-7;
-	const double cos_lat = math::max(0.01, std::cos(ref_lat_deg * deg_to_rad));
-	const double lat_deg = ref_lat_deg + static_cast<double>(profile.north_m) / earth_radius_m * rad_to_deg;
-	const double lon_deg = ref_lon_deg + static_cast<double>(profile.east_m) / (earth_radius_m * cos_lat) * rad_to_deg;
+	const double base_lat_deg = static_cast<double>(gps.lat) * 1e-7;
+	const double base_lon_deg = static_cast<double>(gps.lon) * 1e-7;
+	const int32_t base_alt = gps.alt;
+	const int32_t base_alt_ellipsoid = gps.alt_ellipsoid;
+	const double cos_lat = math::max(0.01, std::cos(base_lat_deg * deg_to_rad));
+	const double lat_deg = base_lat_deg + static_cast<double>(profile.north_m) / earth_radius_m * rad_to_deg;
+	const double lon_deg = base_lon_deg + static_cast<double>(profile.east_m) / (earth_radius_m * cos_lat) * rad_to_deg;
 	const int32_t delta_alt_mm = static_cast<int32_t>(std::llround(-static_cast<double>(profile.down_m) * 1000.0));
 
 	gps.lat = static_cast<int32_t>(std::llround(lat_deg * 1e7));
 	gps.lon = static_cast<int32_t>(std::llround(lon_deg * 1e7));
-	gps.alt = state.fake_gps_ref_alt + delta_alt_mm;
-	gps.alt_ellipsoid = state.fake_gps_ref_alt_ellipsoid + delta_alt_mm;
+	gps.alt = base_alt + delta_alt_mm;
+	gps.alt_ellipsoid = base_alt_ellipsoid + delta_alt_mm;
 
 	if (steady_attack_flag("PX4_STEADY_ATTACK_GPS_VEL_CONSISTENT", true)) {
-		gps.vel_n_m_s = profile.delta_v_n;
-		gps.vel_e_m_s = profile.delta_v_e;
-		gps.vel_d_m_s = profile.delta_v_d;
+		gps.vel_n_m_s += profile.delta_v_n;
+		gps.vel_e_m_s += profile.delta_v_e;
+		gps.vel_d_m_s += profile.delta_v_d;
 		gps.vel_m_s = sqrtf(gps.vel_n_m_s * gps.vel_n_m_s + gps.vel_e_m_s * gps.vel_e_m_s + gps.vel_d_m_s * gps.vel_d_m_s);
 		gps.cog_rad = gps.vel_m_s > 0.01f ? matrix::wrap_2pi(atan2f(gps.vel_e_m_s, gps.vel_n_m_s)) : NAN;
 	}
