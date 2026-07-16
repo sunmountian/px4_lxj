@@ -107,7 +107,7 @@ def wait_stable_hover(master, target_altitude_m, stable_seconds, timeout_s):
 
         horizontal_speed = math.hypot(float(msg.vx), float(msg.vy))
         altitude_error = abs(float(msg.z) + target_altitude_m)
-        stable = altitude_error < 0.30 and horizontal_speed < 0.15 and abs(float(msg.vz)) < 0.10
+        stable = altitude_error < 0.60 and horizontal_speed < 0.15 and abs(float(msg.vz)) < 0.10
 
         if stable:
             if stable_since is None:
@@ -344,7 +344,7 @@ def terminate_process(process):
 
 def main():
     parser = argparse.ArgumentParser(description='Run a PX4 SITL constant-velocity steady attack experiment.')
-    parser.add_argument('--mode', choices=['baseline', 'gps-only', 'gps-accel'], default='gps-accel')
+    parser.add_argument('--mode', choices=['baseline', 'gps-only', 'gps-accel', 'full'], default='gps-accel')
     parser.add_argument('--vn', type=float, default=1.0)
     parser.add_argument('--ve', type=float, default=0.0)
     parser.add_argument('--vd', type=float, default=0.0)
@@ -390,9 +390,9 @@ def main():
         env['PX4_STEADY_ATTACK_GPS_VEL_CONSISTENT'] = '1'
         env['PX4_STEADY_ATTACK_IMU'] = '0' if args.mode == 'gps-only' else '1'
         env['PX4_STEADY_ATTACK_ACCEL'] = '1'
-        env['PX4_STEADY_ATTACK_GYRO'] = '0'
-        env['PX4_STEADY_ATTACK_MAG'] = '0'
-        env['PX4_STEADY_ATTACK_BARO'] = '0'
+        env['PX4_STEADY_ATTACK_GYRO'] = '1' if args.mode == 'full' else '0'
+        env['PX4_STEADY_ATTACK_MAG'] = '1' if args.mode == 'full' else '0'
+        env['PX4_STEADY_ATTACK_BARO'] = '1' if args.mode == 'full' else '0'
 
     start_wall_time = time.time()
     hover_state = None
@@ -413,6 +413,12 @@ def main():
 
         try:
             time.sleep(args.preflight_wait)
+            process.stdin.write('mavlink stop -u 18570\n')
+            process.stdin.write('mavlink start -x -u 18570 -r 4000000 -f -p\n')
+            process.stdin.write('mavlink stream -r 50 -s POSITION_TARGET_LOCAL_NED -u 18570\n')
+            process.stdin.write('mavlink stream -r 50 -s LOCAL_POSITION_NED -u 18570\n')
+            process.stdin.write('mavlink stream -r 50 -s GLOBAL_POSITION_INT -u 18570\n')
+            process.stdin.write('mavlink stream -r 50 -s ATTITUDE -u 18570\n')
             process.stdin.write('param set COM_RCL_EXCEPT 7\n')
             process.stdin.write('commander takeoff\n')
             process.stdin.flush()

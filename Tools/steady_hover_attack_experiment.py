@@ -205,7 +205,7 @@ def terminate_process(process):
 
 def main():
     parser = argparse.ArgumentParser(description='Run a stable-hover PX4 SITL steady attack experiment.')
-    parser.add_argument('--mode', choices=['baseline', 'gps-only', 'gps-accel'], default='gps-accel')
+    parser.add_argument('--mode', choices=['baseline', 'gps-only', 'gps-accel', 'full'], default='gps-accel')
     parser.add_argument('--north', type=float, default=5.0)
     parser.add_argument('--east', type=float, default=0.0)
     parser.add_argument('--down', type=float, default=0.0)
@@ -244,9 +244,9 @@ def main():
         env['PX4_STEADY_ATTACK_GPS_VEL_CONSISTENT'] = '1'
         env['PX4_STEADY_ATTACK_IMU'] = '0' if args.mode == 'gps-only' else '1'
         env['PX4_STEADY_ATTACK_ACCEL'] = '1'
-        env['PX4_STEADY_ATTACK_GYRO'] = '0'
-        env['PX4_STEADY_ATTACK_MAG'] = '0'
-        env['PX4_STEADY_ATTACK_BARO'] = '0'
+        env['PX4_STEADY_ATTACK_GYRO'] = '1' if args.mode == 'full' else '0'
+        env['PX4_STEADY_ATTACK_MAG'] = '1' if args.mode == 'full' else '0'
+        env['PX4_STEADY_ATTACK_BARO'] = '1' if args.mode == 'full' else '0'
 
     start_wall_time = time.time()
 
