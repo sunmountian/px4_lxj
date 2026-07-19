@@ -1,0 +1,5 @@
+menuconfig MODULES_SENSOR_ATTACK_DETECTOR
+	bool "sensor_attack_detector"
+	default n
+	---help---
+		Enable the sensor attack detector module
