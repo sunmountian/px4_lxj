@@ -259,6 +259,12 @@ then
 	gyro_calibration start
 fi
 
+# Passive actuator-anchored common sensor attack detector
+if param compare -s SAD_EN 1
+then
+	sensor_attack_detector start
+fi
+
 #user defined mavlink streams for instances can be in PATH
 . px4-rc.mavlink
 

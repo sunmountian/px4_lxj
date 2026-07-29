@@ -20,6 +20,13 @@
 #
 ############################################################################
 
+px4_add_library(sensor_attack_detector_core
+	GlrtSolver.cpp
+	GlrtSolver.hpp
+	AttackBasis.hpp
+	EventBuffer.hpp
+)
+
 px4_add_module(
 	MODULE modules__sensor_attack_detector
 	MAIN sensor_attack_detector
@@ -27,5 +34,12 @@ px4_add_module(
 		SensorAttackDetector.cpp
 		SensorAttackDetector.hpp
 	DEPENDS
+		geo
 		px4_work_queue
+		sensor_attack_detector_core
+)
+
+px4_add_unit_gtest(
+	SRC SensorAttackDetectorTest.cpp
+	LINKLIBS sensor_attack_detector_core
 )

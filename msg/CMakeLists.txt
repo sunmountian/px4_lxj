@@ -152,6 +152,7 @@ set(msg_files
 	sensor_hygrometer.msg
 	sensor_mag.msg
 	sensor_preflight_mag.msg
+	sensor_attack_status.msg
 	sensor_selection.msg
 	sensors_status_imu.msg
 	sensors_status.msg
