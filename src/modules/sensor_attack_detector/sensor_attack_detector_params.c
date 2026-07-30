@@ -94,7 +94,7 @@ PARAM_DEFINE_INT32(SAD_ACT_SRC, 1);
  * @max 20
  * @group Sensor Attack Detector
  */
-PARAM_DEFINE_FLOAT(SAD_THR_GAIN, 5.f);
+PARAM_DEFINE_FLOAT(SAD_THR_GAIN, 3.47118998f);
 
 /**
  * Maximum accepted GPS horizontal position error
@@ -122,7 +122,7 @@ PARAM_DEFINE_FLOAT(SAD_REG, 0.1f);
  *
  * @group Sensor Attack Detector
  */
-PARAM_DEFINE_FLOAT(SAD_GLRT_MU, 0.f);
+PARAM_DEFINE_FLOAT(SAD_GLRT_MU, 3.99645138f);
 
 /**
  * Nominal standard deviation of the eight-second GLRT
@@ -132,7 +132,7 @@ PARAM_DEFINE_FLOAT(SAD_GLRT_MU, 0.f);
  * @min 0.000001
  * @group Sensor Attack Detector
  */
-PARAM_DEFINE_FLOAT(SAD_GLRT_SD, 1.f);
+PARAM_DEFINE_FLOAT(SAD_GLRT_SD, 5.98480034f);
 
 /**
  * CUSUM drift
@@ -150,7 +150,7 @@ PARAM_DEFINE_FLOAT(SAD_CUS_DR, 0.5f);
  * @min 0
  * @group Sensor Attack Detector
  */
-PARAM_DEFINE_FLOAT(SAD_THRESH, 20.f);
+PARAM_DEFINE_FLOAT(SAD_THRESH, 60.4715042f);
 
 /**
  * Consecutive threshold crossings required for alert

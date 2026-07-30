@@ -1,0 +1,5 @@
+flight_id,scenario,north_m,east_m,ramp_s,duration_s
+pva100_north_20s,pva_100m_north_ramp20s,100,0,20,25
+pva100_east_20s,pva_100m_east_ramp20s,0,100,20,25
+pva100_south_20s,pva_100m_south_ramp20s,-100,0,20,25
+pva100_west_20s,pva_100m_west_ramp20s,0,-100,20,25
