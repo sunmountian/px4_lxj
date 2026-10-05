@@ -1,0 +1,78 @@
+name: ChatGPT SITL Bootstrap
+
+on:
+  push:
+    branches:
+      - chatgpt-sitl-bootstrap-20261005
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - name: Checkout PX4 fork with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Environment summary
+        run: |
+          set -eux
+          uname -a
+          python3 --version
+          cmake --version
+          ninja --version || true
+          java -version || true
+          git submodule status --recursive > submodule_status.txt
+          df -h .
+
+      - name: Build px4_sitl_default
+        run: |
+          set -eux
+          make px4_sitl_default
+
+      - name: Prepare source bundle
+        run: |
+          set -eux
+          mkdir -p /tmp/bootstrap_out
+          git status --short
+          tar             --exclude='./.git'             --exclude='./build/px4_sitl_default'             -czf /tmp/bootstrap_out/px4_lxj_source_with_submodules.tar.gz .
+          cp submodule_status.txt /tmp/bootstrap_out/
+
+      - name: Prepare SITL build bundle
+        run: |
+          set -eux
+          tar -czf /tmp/bootstrap_out/px4_sitl_default_build.tar.gz             build/px4_sitl_default             ROMFS             posix-configs             Tools/jMAVSim             Tools/sitl_gazebo
+
+      - name: Prepare offline Python packages
+        run: |
+          set -eux
+          mkdir -p /tmp/bootstrap_out/wheels
+          python3 -m pip download --dest /tmp/bootstrap_out/wheels             pyulog pymavlink kconfiglib toml empy==3.3.4 pyserial cerberus argcomplete pkgconfig wheel
+          tar -czf /tmp/bootstrap_out/python_offline_packages.tar.gz -C /tmp/bootstrap_out wheels
+
+      - name: Upload source bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: px4-lxj-source
+          path: |
+            /tmp/bootstrap_out/px4_lxj_source_with_submodules.tar.gz
+            /tmp/bootstrap_out/submodule_status.txt
+          retention-days: 3
+
+      - name: Upload SITL build
+        uses: actions/upload-artifact@v4
+        with:
+          name: px4-sitl-build
+          path: /tmp/bootstrap_out/px4_sitl_default_build.tar.gz
+          retention-days: 3
+
+      - name: Upload Python offline packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: px4-python-offline
+          path: /tmp/bootstrap_out/python_offline_packages.tar.gz
+          retention-days: 3
