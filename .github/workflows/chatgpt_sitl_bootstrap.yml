@@ -53,7 +53,7 @@ jobs:
           set -eux
           mkdir -p /tmp/bootstrap_out/wheels
           python3 -m pip download --dest /tmp/bootstrap_out/wheels \
-            pyulog pymavlink kconfiglib toml empy==3.3.4 pyserial cerberus argcomplete pkgconfig wheel
+            pyulog pymavlink kconfiglib toml empy==3.3.4 pyserial cerberus argcomplete pkgconfig wheel pyros-genmsg pyros-genpy
           tar -czf /tmp/bootstrap_out/python_offline_packages.tar.gz -C /tmp/bootstrap_out wheels
 
       - name: Build px4_sitl_default
