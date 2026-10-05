@@ -34,6 +34,8 @@ jobs:
           set -eux
           git tag -f v1.13.0-0.0.1-dev HEAD
           git describe --tags --always --dirty
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          git -C platforms/nuttx/NuttX/nuttx tag | tail -n 20
 
       - name: Prepare source bundle
         run: |
