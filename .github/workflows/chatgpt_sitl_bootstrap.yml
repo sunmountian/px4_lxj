@@ -29,32 +29,56 @@ jobs:
           git submodule status --recursive > submodule_status.txt
           df -h .
 
-      - name: Build px4_sitl_default
+      - name: Add local PX4-compatible version tag
         run: |
           set -eux
-          make px4_sitl_default
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git describe --tags --always --dirty
 
       - name: Prepare source bundle
         run: |
           set -eux
           mkdir -p /tmp/bootstrap_out
           git status --short
-          tar             --exclude='./.git'             --exclude='./build/px4_sitl_default'             -czf /tmp/bootstrap_out/px4_lxj_source_with_submodules.tar.gz .
+          tar \
+            --exclude='./.git' \
+            --exclude='./build/px4_sitl_default' \
+            -czf /tmp/bootstrap_out/px4_lxj_source_with_submodules.tar.gz .
           cp submodule_status.txt /tmp/bootstrap_out/
-
-      - name: Prepare SITL build bundle
-        run: |
-          set -eux
-          tar -czf /tmp/bootstrap_out/px4_sitl_default_build.tar.gz             build/px4_sitl_default             ROMFS             posix-configs             Tools/jMAVSim             Tools/sitl_gazebo
 
       - name: Prepare offline Python packages
         run: |
           set -eux
           mkdir -p /tmp/bootstrap_out/wheels
-          python3 -m pip download --dest /tmp/bootstrap_out/wheels             pyulog pymavlink kconfiglib toml empy==3.3.4 pyserial cerberus argcomplete pkgconfig wheel
+          python3 -m pip download --dest /tmp/bootstrap_out/wheels \
+            pyulog pymavlink kconfiglib toml empy==3.3.4 pyserial cerberus argcomplete pkgconfig wheel
           tar -czf /tmp/bootstrap_out/python_offline_packages.tar.gz -C /tmp/bootstrap_out wheels
 
+      - name: Build px4_sitl_default
+        run: |
+          set -eux
+          make px4_sitl_default
+
+      - name: Build Gazebo SITL target
+        run: |
+          set -eux
+          make px4_sitl_default sitl_gazebo
+
+      - name: Prepare SITL build bundle
+        if: always()
+        run: |
+          set -eux
+          if [ -d build/px4_sitl_default ]; then
+            tar -czf /tmp/bootstrap_out/px4_sitl_default_build.tar.gz \
+              build/px4_sitl_default \
+              ROMFS \
+              posix-configs \
+              Tools/jMAVSim \
+              Tools/sitl_gazebo
+          fi
+
       - name: Upload source bundle
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: px4-lxj-source
@@ -62,17 +86,22 @@ jobs:
             /tmp/bootstrap_out/px4_lxj_source_with_submodules.tar.gz
             /tmp/bootstrap_out/submodule_status.txt
           retention-days: 3
+          if-no-files-found: warn
 
       - name: Upload SITL build
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: px4-sitl-build
           path: /tmp/bootstrap_out/px4_sitl_default_build.tar.gz
           retention-days: 3
+          if-no-files-found: warn
 
       - name: Upload Python offline packages
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: px4-python-offline
           path: /tmp/bootstrap_out/python_offline_packages.tar.gz
           retention-days: 3
+          if-no-files-found: warn
