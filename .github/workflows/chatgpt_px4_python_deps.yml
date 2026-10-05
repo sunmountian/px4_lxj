@@ -1,0 +1,24 @@
+name: ChatGPT PX4 Python Deps
+
+on:
+  push:
+    branches:
+      - chatgpt-sitl-bootstrap-20261005
+
+jobs:
+  deps:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download PX4 Python build dependencies
+        run: |
+          set -eux
+          mkdir -p wheels
+          python3 -m pip download --dest wheels \
+            pyros-genmsg pyros-genpy
+          tar -czf python_uorb_deps.tar.gz wheels
+      - name: Upload dependencies
+        uses: actions/upload-artifact@v4
+        with:
+          name: px4-uorb-python-deps
+          path: python_uorb_deps.tar.gz
+          retention-days: 3
