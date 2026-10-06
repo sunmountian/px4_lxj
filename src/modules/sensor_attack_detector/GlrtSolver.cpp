@@ -47,6 +47,12 @@ void AxisGlrtAccumulator::addObservation(float observation, float weight,
 		return;
 	}
 
+	const size_t group_index = static_cast<size_t>(group);
+
+	if (group_index >= kResidualGroupCount) {
+		return;
+	}
+
 	float row[kJointDim] {};
 
 	for (size_t i = 0; i < kNormalDim; ++i) {
@@ -66,13 +72,6 @@ void AxisGlrtAccumulator::addObservation(float observation, float weight,
 	}
 
 	_squared_observation += weight * observation * observation;
-
-	const size_t group_index = static_cast<size_t>(group);
-
-	if (group_index >= kResidualGroupCount) {
-		return;
-	}
-
 	_group_squared_observation[group_index] += observation * observation;
 
 	if (_group_observation_count[group_index] < UINT16_MAX) {
@@ -81,16 +80,10 @@ void AxisGlrtAccumulator::addObservation(float observation, float weight,
 
 	for (size_t i = 0; i < kNormalDim; ++i) {
 		_group_normal_rhs[group_index][i] += normal_basis[i] * observation;
-
-		for (size_t j = 0; j < kNormalDim; ++j) {
-			_group_normal_hessian[group_index][i][j] += normal_basis[i] * normal_basis[j];
-		}
-	}
-
-	for (size_t i = 0; i < kNormalDim; ++i) {
 		_normal_rhs[i] += weight * normal_basis[i] * observation;
 
 		for (size_t j = 0; j < kNormalDim; ++j) {
+			_group_normal_hessian[group_index][i][j] += normal_basis[i] * normal_basis[j];
 			_normal_hessian[i][j] += weight * normal_basis[i] * normal_basis[j];
 		}
 	}
@@ -108,7 +101,7 @@ void AxisGlrtAccumulator::addObservation(float observation, float weight,
 	}
 }
 
-AxisGlrtAccumulator::Result AxisGlrtAccumulator::solve(float regularization, const NormalPrior &prior) const
+AxisGlrtAccumulator::Result AxisGlrtAccumulator::solve(float regularization) const
 {
 	Result result{};
 	result.observation_count = _observation_count;
@@ -117,46 +110,25 @@ AxisGlrtAccumulator::Result AxisGlrtAccumulator::solve(float regularization, con
 		return result;
 	}
 
-	float normal_hessian[kNormalDim][kNormalDim] {};
-	float normal_rhs[kNormalDim] {};
-	memcpy(normal_hessian, _normal_hessian, sizeof(normal_hessian));
-	memcpy(normal_rhs, _normal_rhs, sizeof(normal_rhs));
-	float prior_constant = 0.f;
-
-	for (size_t i = 0; i < kNormalDim; ++i) {
-		if (!isfinite(prior.mean[i]) || !isfinite(prior.precision[i]) || (prior.precision[i] < 0.f)) {
-			return result;
-		}
-
-		normal_hessian[i][i] += prior.precision[i];
-		normal_rhs[i] += prior.precision[i] * prior.mean[i];
-		prior_constant += prior.precision[i] * prior.mean[i] * prior.mean[i];
-	}
-
 	float normal_solution[kNormalDim] {};
 	float normal_minimum_diagonal = 0.f;
 
-	if (!choleskySolve(normal_hessian, normal_rhs, normal_solution, normal_minimum_diagonal)) {
+	if (!choleskySolve(_normal_hessian, _normal_rhs, normal_solution, normal_minimum_diagonal)) {
 		return result;
 	}
 
 	float normal_reduction = 0.f;
 
 	for (size_t i = 0; i < kNormalDim; ++i) {
-		normal_reduction += normal_rhs[i] * normal_solution[i];
+		normal_reduction += _normal_rhs[i] * normal_solution[i];
 	}
 
-	float cost_null = _squared_observation + prior_constant - normal_reduction;
+	float cost_null = _squared_observation - normal_reduction;
 
 	float hessian[kJointDim][kJointDim] {};
 	float rhs[kJointDim] {};
 	memcpy(hessian, _joint_hessian, sizeof(hessian));
 	memcpy(rhs, _joint_rhs, sizeof(rhs));
-
-	for (size_t i = 0; i < kNormalDim; ++i) {
-		hessian[i][i] += prior.precision[i];
-		rhs[i] += prior.precision[i] * prior.mean[i];
-	}
 
 	AttackBasis::addSecondDifferenceRegularizer(hessian, regularization, kNormalDim);
 
@@ -182,13 +154,13 @@ AxisGlrtAccumulator::Result AxisGlrtAccumulator::solve(float regularization, con
 		joint_reduction += rhs[i] * joint_solution[i];
 	}
 
-	float cost_attack = _squared_observation + prior_constant - joint_reduction;
+	float cost_attack = _squared_observation - joint_reduction;
 
 	if (!isfinite(cost_null) || !isfinite(cost_attack)) {
 		return result;
 	}
 
-	const float tolerance = 1e-4f * fmaxf(1.f, _squared_observation + prior_constant);
+	const float tolerance = 1e-4f * fmaxf(1.f, _squared_observation);
 
 	if ((cost_null < 0.f) && (cost_null > -tolerance)) {
 		cost_null = 0.f;
