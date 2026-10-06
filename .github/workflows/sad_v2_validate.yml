@@ -1,0 +1,137 @@
+name: Sensor Attack Detector V2 Validate
+
+concurrency:
+  group: sad-v2-validate-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches:
+      - sad-v2-experiment
+    paths:
+      - '.github/workflows/sad_v2_validate.yml'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - name: Checkout experiment branch
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Prepare PX4 version metadata
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+
+      - name: Ensure Python dependencies and syntax
+        run: |
+          set -eux
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          python3 -m py_compile \
+            Tools/sensor_attack_detector/run_v2_smoke.py \
+            Tools/sensor_attack_detector/calibrate_normal_priors.py \
+            Tools/sensor_attack_detector/calibrate_residual_weights.py
+
+      - name: Build V2 PX4 and Gazebo plugins
+        run: |
+          set -eux
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+
+      # These development priors are from four independent broad-prior nominal
+      # smooth-turn flights in smoke run 20. Raw between-flight SD was
+      # 0.01359 for scale and 0.01207 for dynamic; conservative floors 0.02 and
+      # 0.05 are retained.
+      - name: Nominal turns for residual-weight calibration
+        run: |
+          set -eux
+          for i in 1 2 3; do
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py \
+              --scenario turn \
+              --speed 1.3 \
+              --turn-duration 6 \
+              --straight-before 12 \
+              --straight-after 20 \
+              --normal-scale-mean -0.33720700150500427 \
+              --normal-scale-sd 0.02 \
+              --normal-dynamic-mean 0.4282177372712227 \
+              --normal-dynamic-sd 0.05
+          done
+
+      - name: Calibrate development residual weights
+        id: weights
+        run: |
+          set -eux
+          mkdir -p build/sad_v2_smoke/calibration
+          printf 'flight_id,scenario,nominal,ulog\n' \
+            > build/sad_v2_smoke/calibration/weight_manifest.csv
+          i=0
+          for RESULT_JSON in $(find build/sad_v2_smoke -maxdepth 2 -path '*/turn_*/result.json' -type f | sort); do
+            i=$((i + 1))
+            ULOG="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ulog"])' "$RESULT_JSON")"
+            printf 'weight_turn_%d,turn,1,%s\n' "$i" "$ULOG" \
+              >> build/sad_v2_smoke/calibration/weight_manifest.csv
+          done
+          test "$i" -eq 3
+          python3 Tools/sensor_attack_detector/calibrate_residual_weights.py \
+            --manifest build/sad_v2_smoke/calibration/weight_manifest.csv \
+            --minimum-flights 3 \
+            --output build/sad_v2_smoke/calibration/residual_weights.json
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          p=json.load(open("build/sad_v2_smoke/calibration/residual_weights.json"))["candidate_parameters"]
+          print(f"wa={p['SAD_WA']}")
+          print(f"wv={p['SAD_WV']}")
+          print(f"wp={p['SAD_WP']}")
+          PY
+
+      - name: Held-out nominal smooth turn
+        run: |
+          set -eux
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py \
+            --scenario turn \
+            --speed 1.3 \
+            --turn-duration 6 \
+            --straight-before 12 \
+            --straight-after 20 \
+            --normal-scale-mean -0.33720700150500427 \
+            --normal-scale-sd 0.02 \
+            --normal-dynamic-mean 0.4282177372712227 \
+            --normal-dynamic-sd 0.05 \
+            --weight-acceleration "${{ steps.weights.outputs.wa }}" \
+            --weight-velocity "${{ steps.weights.outputs.wv }}" \
+            --weight-position "${{ steps.weights.outputs.wp }}"
+
+      - name: Primary 100m 20s PVA attack
+        run: |
+          set -eux
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py \
+            --scenario pva-hover \
+            --pva-north 100 \
+            --pva-east 0 \
+            --pva-ramp 20 \
+            --pva-observation 8 \
+            --normal-scale-mean -0.33720700150500427 \
+            --normal-scale-sd 0.02 \
+            --normal-dynamic-mean 0.4282177372712227 \
+            --normal-dynamic-sd 0.05 \
+            --weight-acceleration "${{ steps.weights.outputs.wa }}" \
+            --weight-velocity "${{ steps.weights.outputs.wv }}" \
+            --weight-position "${{ steps.weights.outputs.wp }}"
+
+      - name: Upload validation outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sad-v2-validate
+          path: |
+            build/sad_v2_smoke
+            build/px4_sitl_default/tmp/rootfs/log
+          retention-days: 3
