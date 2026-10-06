@@ -35,7 +35,7 @@ float32 direction_e
 float32 direction_norm
 float32 selected_window_s
 
-# V2 normal-model parameter estimates for calibration/diagnostics.
+# Fixed-model diagnostics: bias is estimated online; scale/dynamic are frozen calibration coefficients.
 float32 normal_bias_n
 float32 normal_bias_e
 float32 normal_scale_n
