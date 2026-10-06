@@ -1,0 +1,92 @@
+name: Sensor Attack Detector V2 Fixed Limit
+
+on:
+  push:
+    branches:
+      - sad-v2-experiment
+    paths:
+      - '.github/workflows/sad_v2_fixed_limit.yml'
+
+jobs:
+  fixed-limit:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Prepare environment
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+
+      - name: Compare narrow-prior limit
+        run: |
+          set -eux
+          OUT=build/sad_v2_fixed_limit
+          mkdir -p "$OUT"
+          AS_MU=-0.33720698952674866
+          AD_MU=0.42821773886680603
+          WA=121.6889877319336
+          WV=60.0449333190918
+          WP=43.07465362548828
+          GMU=3.6631453377859935
+          GSD=5.924796674296906
+          THR=43.806134057729935
+
+          run_pair () {
+            LABEL="$1"; AS_SD="$2"; AD_SD="$3"
+
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py               --scenario turn --speed 1.3 --turn-duration 8               --straight-before 10 --straight-after 14               --normal-scale-mean "$AS_MU" --normal-scale-sd "$AS_SD"               --normal-dynamic-mean "$AD_MU" --normal-dynamic-sd "$AD_SD"               --weight-acceleration "$WA" --weight-velocity "$WV" --weight-position "$WP"               --glrt-mean "$GMU" --glrt-sd "$GSD" --threshold "$THR"
+            TURN=$(find build/sad_v2_smoke -maxdepth 2 -path '*/turn_*/result.json' -type f | sort | tail -n 1)
+            cp "$TURN" "$OUT/${LABEL}_turn.json"
+
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py               --scenario pva-hover --pva-north 100 --pva-east 0               --pva-ramp 20 --pva-observation 8               --normal-scale-mean "$AS_MU" --normal-scale-sd "$AS_SD"               --normal-dynamic-mean "$AD_MU" --normal-dynamic-sd "$AD_SD"               --weight-acceleration "$WA" --weight-velocity "$WV" --weight-position "$WP"               --glrt-mean "$GMU" --glrt-sd "$GSD" --threshold "$THR"
+            ATTACK=$(find build/sad_v2_smoke -maxdepth 2 -path '*/pva-hover_*/result.json' -type f | sort | tail -n 1)
+            cp "$ATTACK" "$OUT/${LABEL}_attack.json"
+          }
+
+          run_pair x1 0.02 0.05
+          run_pair x0_25 0.005 0.0125
+          run_pair x0_1 0.002 0.005
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          out=Path("build/sad_v2_fixed_limit")
+          rows=[]
+          for label in ("x1","x0_25","x0_1"):
+              t=json.load(open(out/f"{label}_turn.json"))
+              a=json.load(open(out/f"{label}_attack.json"))
+              rows.append({
+                  "label":label,
+                  "scale_sd":t["parameters"]["SAD_AS_SD"],
+                  "dynamic_sd":t["parameters"]["SAD_AD_SD"],
+                  "turn_alert_samples":t["detector"]["alert_samples"],
+                  "turn_glrt_mean":t["detector"]["glrt_mean"],
+                  "turn_glrt_max":t["detector"]["glrt_max"],
+                  "attack_pre_alerts":a["detector"].get("pre_attack_alert_count"),
+                  "attack_post_alerts":a["detector"].get("post_attack_alert_count"),
+                  "attack_delay_s":a["detector"].get("first_alert_delay_s"),
+                  "attack_post_glrt_mean":a["detector"].get("post_attack_glrt_mean"),
+                  "attack_post_glrt_max":a["detector"].get("post_attack_glrt_max")
+              })
+          (out/"summary.json").write_text(json.dumps(rows,indent=2)+"\n")
+          print(json.dumps(rows,indent=2))
+          PY
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sad-v2-fixed-limit
+          path: build/sad_v2_fixed_limit
+          retention-days: 3
