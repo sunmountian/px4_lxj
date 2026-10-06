@@ -1,0 +1,173 @@
+name: Sensor Attack Detector V2 Sweep
+
+concurrency:
+  group: sad-v2-sweep-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches:
+      - sad-v2-experiment
+    paths:
+      - '.github/workflows/sad_v2_sweep.yml'
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - name: Checkout experiment branch
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Prepare PX4 version metadata
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+
+      - name: Install Python dependencies and syntax-check tools
+        run: |
+          set -eux
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          python3 -m py_compile \
+            Tools/sensor_attack_detector/run_v2_smoke.py \
+            Tools/sensor_attack_detector/calibrate_thresholds.py
+
+      - name: Build PX4 SITL and Gazebo
+        run: |
+          set -eux
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+
+      - name: Collect development nominal set
+        run: |
+          set -eux
+          COMMON="--normal-scale-mean -0.33720700150500427 --normal-scale-sd 0.02 --normal-dynamic-mean 0.4282177372712227 --normal-dynamic-sd 0.05 --weight-acceleration 121.688991343442 --weight-velocity 60.04493287382918 --weight-position 43.07465181811266"
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py --scenario turn --speed 0.7 --turn-duration 8 --straight-before 10 --straight-after 14 $COMMON
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py --scenario turn --speed 1.3 --turn-duration 6 --straight-before 10 --straight-after 14 $COMMON
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py --scenario turn --speed 1.0 --turn-duration 6 --straight-before 10 --straight-after 14 $COMMON
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py --scenario turn --speed 1.3 --turn-duration 4 --straight-before 10 --straight-after 14 $COMMON
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py --scenario turn --speed 0.7 --turn-duration 4 --straight-before 10 --straight-after 14 $COMMON
+
+      - name: Build development threshold manifest
+        run: |
+          set -eux
+          mkdir -p build/sad_v2_smoke/sweep
+          printf 'flight_id,split,scenario,nominal,ulog\n' > build/sad_v2_smoke/sweep/threshold_manifest.csv
+          i=0
+          for RESULT_JSON in $(find build/sad_v2_smoke -maxdepth 2 -path '*/turn_*/result.json' -type f | sort); do
+            i=$((i + 1))
+            ULOG="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ulog"])' "$RESULT_JSON")"
+            case "$i" in
+              1|2) SPLIT=fit ;;
+              3|4|5) SPLIT=calibration ;;
+              *) continue ;;
+            esac
+            printf 'nominal_%d,%s,turn,1,%s\n' "$i" "$SPLIT" "$ULOG" >> build/sad_v2_smoke/sweep/threshold_manifest.csv
+          done
+          test "$i" -eq 5
+
+      - name: Calibrate development sequential detector
+        id: seq
+        run: |
+          set -eux
+          python3 Tools/sensor_attack_detector/calibrate_thresholds.py \
+            --manifest build/sad_v2_smoke/sweep/threshold_manifest.csv \
+            --false-alarm-rate 0.05 \
+            --drift 0.5 \
+            --consecutive 3 \
+            --output build/sad_v2_smoke/sweep/thresholds.json
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          p=json.load(open("build/sad_v2_smoke/sweep/thresholds.json"))["candidate_parameters"]
+          print(f"mu={p['SAD_GLRT_MU']}")
+          print(f"sd={p['SAD_GLRT_SD']}")
+          print(f"drift={p['SAD_CUS_DR']}")
+          print(f"threshold={p['SAD_THRESH']}")
+          print(f"consecutive={p['SAD_CONSEC']}")
+          PY
+
+      - name: Held-out sequential normal turn
+        run: |
+          set -eux
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py \
+            --scenario turn --speed 1.3 --turn-duration 8 --straight-before 10 --straight-after 14 \
+            --normal-scale-mean -0.33720700150500427 --normal-scale-sd 0.02 \
+            --normal-dynamic-mean 0.4282177372712227 --normal-dynamic-sd 0.05 \
+            --weight-acceleration 121.688991343442 --weight-velocity 60.04493287382918 --weight-position 43.07465181811266 \
+            --glrt-mean "${{ steps.seq.outputs.mu }}" --glrt-sd "${{ steps.seq.outputs.sd }}" \
+            --cusum-drift "${{ steps.seq.outputs.drift }}" --threshold "${{ steps.seq.outputs.threshold }}" \
+            --consecutive "${{ steps.seq.outputs.consecutive }}"
+
+      - name: Four-direction primary 100m 20s attacks
+        run: |
+          set -eux
+          COMMON="--normal-scale-mean -0.33720700150500427 --normal-scale-sd 0.02 --normal-dynamic-mean 0.4282177372712227 --normal-dynamic-sd 0.05 --weight-acceleration 121.688991343442 --weight-velocity 60.04493287382918 --weight-position 43.07465181811266 --glrt-mean ${{ steps.seq.outputs.mu }} --glrt-sd ${{ steps.seq.outputs.sd }} --cusum-drift ${{ steps.seq.outputs.drift }} --threshold ${{ steps.seq.outputs.threshold }} --consecutive ${{ steps.seq.outputs.consecutive }}"
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 20 --pva-observation 8 $COMMON
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py --scenario pva-hover --pva-north 0 --pva-east 100 --pva-ramp 20 --pva-observation 8 $COMMON
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py --scenario pva-hover --pva-north -100 --pva-east 0 --pva-ramp 20 --pva-observation 8 $COMMON
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py --scenario pva-hover --pva-north 0 --pva-east -100 --pva-ramp 20 --pva-observation 8 $COMMON
+
+      - name: Slower attack sweep
+        run: |
+          set -eux
+          COMMON="--normal-scale-mean -0.33720700150500427 --normal-scale-sd 0.02 --normal-dynamic-mean 0.4282177372712227 --normal-dynamic-sd 0.05 --weight-acceleration 121.688991343442 --weight-velocity 60.04493287382918 --weight-position 43.07465181811266 --glrt-mean ${{ steps.seq.outputs.mu }} --glrt-sd ${{ steps.seq.outputs.sd }} --cusum-drift ${{ steps.seq.outputs.drift }} --threshold ${{ steps.seq.outputs.threshold }} --consecutive ${{ steps.seq.outputs.consecutive }}"
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 30 --pva-observation 10 $COMMON
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 40 --pva-observation 12 $COMMON
+
+      - name: Validate development sweep
+        run: |
+          set -eux
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root=Path("build/sad_v2_smoke")
+          results=[json.load(open(p)) for p in root.glob("*/result.json")]
+          sequential_turns=[
+              r for r in results
+              if r.get("scenario")=="turn"
+              and r.get("parameters",{}).get("SAD_THRESH",1e6) < 1e5
+          ]
+          assert len(sequential_turns)==1, len(sequential_turns)
+          assert sequential_turns[0]["detector"].get("alert_samples",0)==0, sequential_turns[0]
+
+          primary=[
+              r for r in results
+              if r.get("scenario")=="pva-hover"
+              and r.get("attack_spec",{}).get("ramp_s")==20.0
+          ]
+          assert len(primary)==4, len(primary)
+          for r in primary:
+              d=r["detector"]
+              assert d.get("pre_attack_alert_count",0)==0, r
+              assert d.get("first_alert_delay_s") is not None, r
+
+          summary={
+              "development_threshold": json.load(open(root/"sweep"/"thresholds.json"))["candidate_parameters"],
+              "heldout_normal": sequential_turns[0],
+              "primary_attacks": primary,
+              "slow_attacks":[
+                  r for r in results
+                  if r.get("scenario")=="pva-hover"
+                  and r.get("attack_spec",{}).get("ramp_s") in (30.0,40.0)
+              ],
+          }
+          (root/"sweep"/"summary.json").write_text(json.dumps(summary,indent=2,sort_keys=True)+"\n")
+          print(json.dumps(summary,indent=2,sort_keys=True))
+          PY
+
+      - name: Upload sweep outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sad-v2-sweep
+          path: |
+            build/sad_v2_smoke
+            build/px4_sitl_default/tmp/rootfs/log
+          retention-days: 3
