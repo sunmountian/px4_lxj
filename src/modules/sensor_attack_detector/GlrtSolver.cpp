@@ -2,61 +2,58 @@
  *
  *   Copyright (c) 2026 PX4 Development Team. All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the distribution.
- * 3. Neither the name PX4 nor the names of its contributors may be used to
- *    endorse or promote products derived from this software without specific
- *    prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES ARE DISCLAIMED.
- *
  ****************************************************************************/
 
 #include "GlrtSolver.hpp"
 
-#include <float.h>
 #include <math.h>
 #include <string.h>
 
 void AxisGlrtAccumulator::reset()
 {
-	_normal_hessian = 0.f;
-	_normal_rhs = 0.f;
-	_squared_observation = 0.f;
-	_observation_count = 0;
+	memset(_normal_hessian, 0, sizeof(_normal_hessian));
+	memset(_normal_rhs, 0, sizeof(_normal_rhs));
 	memset(_joint_hessian, 0, sizeof(_joint_hessian));
 	memset(_joint_rhs, 0, sizeof(_joint_rhs));
+	_squared_observation = 0.f;
+	_observation_count = 0;
 }
 
-void AxisGlrtAccumulator::addObservation(float observation, float weight, float normal_basis,
+void AxisGlrtAccumulator::addObservation(float observation, float weight,
+		const float (&normal_basis)[kNormalDim],
 		const float (&attack_basis)[kAttackDim])
 {
-	if (!isfinite(observation) || !isfinite(weight) || !(weight > 0.f) || !isfinite(normal_basis)) {
+	if (!isfinite(observation) || !isfinite(weight) || !(weight > 0.f)) {
 		return;
 	}
 
 	float row[kJointDim] {};
-	row[0] = normal_basis;
+
+	for (size_t i = 0; i < kNormalDim; ++i) {
+		if (!isfinite(normal_basis[i])) {
+			return;
+		}
+
+		row[i] = normal_basis[i];
+	}
 
 	for (size_t i = 0; i < kAttackDim; ++i) {
 		if (!isfinite(attack_basis[i])) {
 			return;
 		}
 
-		row[1 + i] = attack_basis[i];
+		row[kNormalDim + i] = attack_basis[i];
 	}
 
-	_normal_hessian += weight * normal_basis * normal_basis;
-	_normal_rhs += weight * normal_basis * observation;
 	_squared_observation += weight * observation * observation;
+
+	for (size_t i = 0; i < kNormalDim; ++i) {
+		_normal_rhs[i] += weight * normal_basis[i] * observation;
+
+		for (size_t j = 0; j < kNormalDim; ++j) {
+			_normal_hessian[i][j] += weight * normal_basis[i] * normal_basis[j];
+		}
+	}
 
 	for (size_t i = 0; i < kJointDim; ++i) {
 		_joint_rhs[i] += weight * row[i] * observation;
@@ -71,51 +68,87 @@ void AxisGlrtAccumulator::addObservation(float observation, float weight, float 
 	}
 }
 
-AxisGlrtAccumulator::Result AxisGlrtAccumulator::solve(float regularization) const
+AxisGlrtAccumulator::Result AxisGlrtAccumulator::solve(float regularization, const NormalPrior &prior) const
 {
 	Result result{};
 	result.observation_count = _observation_count;
 
-	if ((_observation_count < kJointDim) || !isfinite(_normal_hessian) || !(_normal_hessian > 1e-8f)
-	    || !isfinite(_normal_rhs) || !isfinite(_squared_observation)) {
+	if ((_observation_count < kJointDim) || !isfinite(_squared_observation)) {
 		return result;
 	}
 
+	float normal_hessian[kNormalDim][kNormalDim] {};
+	float normal_rhs[kNormalDim] {};
+	memcpy(normal_hessian, _normal_hessian, sizeof(normal_hessian));
+	memcpy(normal_rhs, _normal_rhs, sizeof(normal_rhs));
+	float prior_constant = 0.f;
+
+	for (size_t i = 0; i < kNormalDim; ++i) {
+		if (!isfinite(prior.mean[i]) || !isfinite(prior.precision[i]) || (prior.precision[i] < 0.f)) {
+			return result;
+		}
+
+		normal_hessian[i][i] += prior.precision[i];
+		normal_rhs[i] += prior.precision[i] * prior.mean[i];
+		prior_constant += prior.precision[i] * prior.mean[i] * prior.mean[i];
+	}
+
+	float normal_solution[kNormalDim] {};
+	float normal_minimum_diagonal = 0.f;
+
+	if (!choleskySolve(normal_hessian, normal_rhs, normal_solution, normal_minimum_diagonal)) {
+		return result;
+	}
+
+	float normal_reduction = 0.f;
+
+	for (size_t i = 0; i < kNormalDim; ++i) {
+		normal_reduction += normal_rhs[i] * normal_solution[i];
+	}
+
+	float cost_null = _squared_observation + prior_constant - normal_reduction;
+
 	float hessian[kJointDim][kJointDim] {};
+	float rhs[kJointDim] {};
 	memcpy(hessian, _joint_hessian, sizeof(hessian));
-	AttackBasis::addSecondDifferenceRegularizer(hessian, regularization);
+	memcpy(rhs, _joint_rhs, sizeof(rhs));
+
+	for (size_t i = 0; i < kNormalDim; ++i) {
+		hessian[i][i] += prior.precision[i];
+		rhs[i] += prior.precision[i] * prior.mean[i];
+	}
+
+	AttackBasis::addSecondDifferenceRegularizer(hessian, regularization, kNormalDim);
 
 	float attack_trace = 0.f;
 
 	for (size_t i = 0; i < kAttackDim; ++i) {
-		attack_trace += fabsf(hessian[1 + i][1 + i]);
+		attack_trace += fabsf(hessian[kNormalDim + i][kNormalDim + i]);
 	}
 
 	const float gauge_strength = fmaxf(1e-6f, 1e-6f * attack_trace / static_cast<float>(kAttackDim));
-	AttackBasis::addConstantModeGauge(hessian, gauge_strength);
+	AttackBasis::addConstantModeGauge(hessian, gauge_strength, kNormalDim);
 
-	float solution[kJointDim] {};
+	float joint_solution[kJointDim] {};
 	float minimum_diagonal = 0.f;
 
-	if (!choleskySolve(hessian, _joint_rhs, solution, minimum_diagonal)) {
+	if (!choleskySolve(hessian, rhs, joint_solution, minimum_diagonal)) {
 		return result;
 	}
 
-	const float normal_parameter = _normal_rhs / _normal_hessian;
-	float cost_null = _squared_observation - _normal_rhs * normal_parameter;
 	float joint_reduction = 0.f;
 
 	for (size_t i = 0; i < kJointDim; ++i) {
-		joint_reduction += _joint_rhs[i] * solution[i];
+		joint_reduction += rhs[i] * joint_solution[i];
 	}
 
-	float cost_attack = _squared_observation - joint_reduction;
+	float cost_attack = _squared_observation + prior_constant - joint_reduction;
 
 	if (!isfinite(cost_null) || !isfinite(cost_attack)) {
 		return result;
 	}
 
-	const float tolerance = 1e-4f * fmaxf(1.f, _squared_observation);
+	const float tolerance = 1e-4f * fmaxf(1.f, _squared_observation + prior_constant);
 
 	if ((cost_null < 0.f) && (cost_null > -tolerance)) {
 		cost_null = 0.f;
@@ -133,70 +166,15 @@ AxisGlrtAccumulator::Result AxisGlrtAccumulator::solve(float regularization) con
 	result.cost_null = cost_null;
 	result.cost_attack = cost_attack;
 	result.glrt = fmaxf(0.f, cost_null - cost_attack);
-	result.normal_parameter = normal_parameter;
 	result.minimum_cholesky_diagonal = minimum_diagonal;
 
+	for (size_t i = 0; i < kNormalDim; ++i) {
+		result.normal_parameters[i] = normal_solution[i];
+	}
+
 	for (size_t i = 0; i < kAttackDim; ++i) {
-		result.attack_coefficients[i] = solution[1 + i];
+		result.attack_coefficients[i] = joint_solution[kNormalDim + i];
 	}
 
 	return result;
-}
-
-bool AxisGlrtAccumulator::choleskySolve(const float input[kJointDim][kJointDim],
-					const float rhs[kJointDim], float solution[kJointDim],
-					float &minimum_diagonal)
-{
-	float lower[kJointDim][kJointDim] {};
-	minimum_diagonal = FLT_MAX;
-
-	for (size_t i = 0; i < kJointDim; ++i) {
-		for (size_t j = 0; j <= i; ++j) {
-			float sum = input[i][j];
-
-			for (size_t k = 0; k < j; ++k) {
-				sum -= lower[i][k] * lower[j][k];
-			}
-
-			if (i == j) {
-				if (!isfinite(sum) || !(sum > 1e-10f)) {
-					return false;
-				}
-
-				lower[i][j] = sqrtf(sum);
-				minimum_diagonal = fminf(minimum_diagonal, lower[i][j]);
-
-			} else {
-				lower[i][j] = sum / lower[j][j];
-			}
-		}
-	}
-
-	float intermediate[kJointDim] {};
-
-	for (size_t i = 0; i < kJointDim; ++i) {
-		float sum = rhs[i];
-
-		for (size_t j = 0; j < i; ++j) {
-			sum -= lower[i][j] * intermediate[j];
-		}
-
-		intermediate[i] = sum / lower[i][i];
-	}
-
-	for (int i = static_cast<int>(kJointDim) - 1; i >= 0; --i) {
-		float sum = intermediate[i];
-
-		for (size_t j = static_cast<size_t>(i) + 1; j < kJointDim; ++j) {
-			sum -= lower[j][i] * solution[j];
-		}
-
-		solution[i] = sum / lower[i][i];
-
-		if (!isfinite(solution[i])) {
-			return false;
-		}
-	}
-
-	return true;
 }
