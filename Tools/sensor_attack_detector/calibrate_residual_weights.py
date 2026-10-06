@@ -28,9 +28,7 @@ FROZEN_PARAMETERS = (
     "SAD_THR_GAIN",
     "SAD_REG",
     "SAD_AS_MU",
-    "SAD_AS_SD",
     "SAD_AD_MU",
-    "SAD_AD_SD",
 )
 
 
