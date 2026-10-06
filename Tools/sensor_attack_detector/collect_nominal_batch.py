@@ -62,7 +62,7 @@ def parse_args():
     parser.add_argument("--consecutive", type=int, default=3)
     parser.add_argument(
         "--expected-split",
-        choices=("calibration", "test"),
+        choices=("prior", "fit", "calibration", "test"),
         default="calibration",
         help="Required split for every scheduled flight.",
     )
