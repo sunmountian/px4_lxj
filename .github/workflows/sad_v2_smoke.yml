@@ -1,5 +1,9 @@
 name: Sensor Attack Detector V2 Smoke
 
+concurrency:
+  group: sad-v2-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches:
