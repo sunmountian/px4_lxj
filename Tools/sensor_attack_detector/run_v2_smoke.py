@@ -694,6 +694,21 @@ def main():
         "events": event_times,
         "detector": summarize_detector(ulog_path, args.scenario),
     }
+
+    if args.scenario == "pva-hover":
+        result["attack_spec"] = {
+            "north_m": args.pva_north,
+            "east_m": args.pva_east,
+            "ramp_s": args.pva_ramp,
+            "observation_s": args.pva_observation,
+        }
+    else:
+        result["turn_spec"] = {
+            "speed_m_s": args.speed,
+            "turn_duration_s": args.turn_duration,
+            "straight_before_s": args.straight_before,
+            "straight_after_s": args.straight_after,
+        }
     metadata_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(json.dumps(result, indent=2, sort_keys=True))
     print(f"result={metadata_path}")
