@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - sad-v2-fixed-model
+    paths:
+      - 'src/modules/sensor_attack_detector/**'
+      - 'msg/sensor_attack_status.msg'
+      - '.github/workflows/sad_v2_fixed_model_ci.yml'
+
+concurrency:
+  group: sad-v2-fixed-model-ci
+  cancel-in-progress: true
 
 jobs:
   fixed-model:
