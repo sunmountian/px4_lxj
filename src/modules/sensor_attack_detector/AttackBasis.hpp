@@ -108,9 +108,10 @@ public:
 		}
 	}
 
-	static void addSecondDifferenceRegularizer(float matrix[kSize + 1][kSize + 1], float lambda)
+	template<size_t N>
+	static void addSecondDifferenceRegularizer(float (&matrix)[N][N], float lambda, size_t attack_offset = 1)
 	{
-		if (!(lambda > 0.f)) {
+		if (!(lambda > 0.f) || (attack_offset + kSize > N)) {
 			return;
 		}
 
@@ -119,7 +120,8 @@ public:
 		for (size_t difference = 0; difference < kSize - 2; ++difference) {
 			for (size_t i = 0; i < 3; ++i) {
 				for (size_t j = 0; j < 3; ++j) {
-					matrix[1 + difference + i][1 + difference + j] += lambda * row[i] * row[j];
+					matrix[attack_offset + difference + i][attack_offset + difference + j]
+						+= lambda * row[i] * row[j];
 				}
 			}
 		}
@@ -128,23 +130,20 @@ public:
 	/**
 	 * Fix the single unidentifiable constant-curvature gauge.
 	 *
-	 * The linear hats form a partition of unity, so a common offset of every
-	 * attack coefficient produces exactly the same acceleration, velocity and
-	 * position column as the normal constant-acceleration parameter. Penalizing
-	 * the coefficient sum chooses the equivalent solution with zero attack
-	 * mean; the common component is then represented by the unpenalized normal
-	 * parameter. This changes no fitted observation and prevents a singular
-	 * joint normal equation.
+	 * attack_offset locates the first attack coefficient in the joint normal
+	 * equation. This is 1 for the legacy bias-only normal model and 3 for the
+	 * V2 bias/scale/dynamic normal model.
 	 */
-	static void addConstantModeGauge(float matrix[kSize + 1][kSize + 1], float strength)
+	template<size_t N>
+	static void addConstantModeGauge(float (&matrix)[N][N], float strength, size_t attack_offset = 1)
 	{
-		if (!(strength > 0.f)) {
+		if (!(strength > 0.f) || (attack_offset + kSize > N)) {
 			return;
 		}
 
 		for (size_t i = 0; i < kSize; ++i) {
 			for (size_t j = 0; j < kSize; ++j) {
-				matrix[1 + i][1 + j] += strength;
+				matrix[attack_offset + i][attack_offset + j] += strength;
 			}
 		}
 	}
