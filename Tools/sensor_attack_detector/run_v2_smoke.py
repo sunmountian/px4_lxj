@@ -320,13 +320,26 @@ def stream_velocity(master, velocity_function, duration_s, rate_hz):
         master.recv_match(type="LOCAL_POSITION_NED", blocking=True, timeout=0.01)
 
 
-def wait_stable_hover(master, altitude_m, timeout_s=90.0):
+def wait_stable_hover(
+    master,
+    altitude_m,
+    timeout_s=90.0,
+    rate_hz=20.0,
+    keepalive=None,
+):
     stable_since = None
     deadline = time.monotonic() + timeout_s
+    next_send = time.monotonic()
 
     while time.monotonic() < deadline:
+        now = time.monotonic()
+
+        if keepalive is not None and now >= next_send:
+            keepalive()
+            next_send += 1.0 / rate_hz
+
         message = master.recv_match(
-            type="LOCAL_POSITION_NED", blocking=True, timeout=1.0
+            type="LOCAL_POSITION_NED", blocking=True, timeout=0.05
         )
 
         if message is None:
@@ -557,7 +570,12 @@ def main():
                 args.takeoff_altitude,
                 rate_hz=args.setpoint_rate,
             )
-            wait_stable_hover(master, args.takeoff_altitude)
+            wait_stable_hover(
+                master,
+                args.takeoff_altitude,
+                rate_hz=args.setpoint_rate,
+                keepalive=lambda: send_velocity_setpoint(master, 0.0, 0.0, 0.0),
+            )
 
             if args.scenario == "turn":
                 event_times.update(run_turn(master, args))
@@ -565,8 +583,17 @@ def main():
             else:
                 trigger_file.write_text("trigger\n", encoding="utf-8")
                 event_times["attack_trigger_wall"] = time.time()
-                time.sleep(args.pva_ramp + args.pva_observation)
-                shell(process, "commander land", 0.2)
+                stream_velocity(
+                    master,
+                    lambda _: (0.0, 0.0),
+                    args.pva_ramp + args.pva_observation,
+                    args.setpoint_rate,
+                )
+                set_px4_mode(
+                    master,
+                    "LAND",
+                    keepalive=lambda: send_velocity_setpoint(master, 0.0, 0.0, 0.0),
+                )
 
             time.sleep(5.0)
 
