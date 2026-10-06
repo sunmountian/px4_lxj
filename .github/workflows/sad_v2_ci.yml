@@ -1,6 +1,9 @@
 name: Sensor Attack Detector V2 CI
 
 on:
+  push:
+    branches:
+      - sad-v2-experiment
   pull_request:
     branches:
       - main
@@ -14,22 +17,54 @@ jobs:
   v2-build-test:
     runs-on: ubuntu-latest
     container:
-      image: px4io/px4-dev-nuttx-focal:2021-09-08
-      options: --privileged --ulimit core=-1 --security-opt seccomp=unconfined
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
     steps:
-      - uses: actions/checkout@v1
+      - name: Checkout V2 branch with submodules
+        uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          token: ${{ secrets.ACCESS_TOKEN }}
+          submodules: recursive
+          fetch-depth: 1
 
       - name: Provide valid PX4 version for experimental CI
         run: |
-          git config user.email "ci@example.invalid"
-          git config user.name "SAD V2 CI"
-          git tag -f v1.13.0-0.1.0 HEAD
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git describe --tags --always --dirty
 
       - name: Build and run unit tests
-        run: make tests
+        run: |
+          set -eux
+          make tests
 
       - name: Build PX4 SITL
-        run: make px4_sitl_default
+        run: |
+          set -eux
+          make px4_sitl_default
+
+      - name: Prepare V2 source and build bundles
+        if: always()
+        run: |
+          set -eux
+          mkdir -p /tmp/sad_v2_out
+          tar --exclude='./.git' -czf /tmp/sad_v2_out/sad_v2_source.tar.gz .
+          if [ -d build/px4_sitl_default ]; then
+            tar -czf /tmp/sad_v2_out/sad_v2_sitl_build.tar.gz build/px4_sitl_default
+          fi
+
+      - name: Upload V2 source
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sad-v2-source
+          path: /tmp/sad_v2_out/sad_v2_source.tar.gz
+          retention-days: 3
+
+      - name: Upload V2 SITL build
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sad-v2-sitl-build
+          path: /tmp/sad_v2_out/sad_v2_sitl_build.tar.gz
+          retention-days: 3
+          if-no-files-found: warn
