@@ -32,7 +32,7 @@
 class AxisGlrtAccumulator
 {
 public:
-	static constexpr size_t kNormalDim{3};
+	static constexpr size_t kNormalDim{1};
 	static constexpr size_t kAttackDim{AttackBasis::kSize};
 	static constexpr size_t kJointDim{kNormalDim + kAttackDim};
 	static constexpr size_t kResidualGroupCount{3};
@@ -41,11 +41,6 @@ public:
 		kAcceleration = 0,
 		kVelocity = 1,
 		kPosition = 2
-	};
-
-	struct NormalPrior {
-		float mean[kNormalDim] {0.f, 0.f, 0.f};
-		float precision[kNormalDim] {0.f, 0.f, 0.f};
 	};
 
 	struct Result {
@@ -65,7 +60,7 @@ public:
 			    const float (&normal_basis)[kNormalDim],
 			    const float (&attack_basis)[kAttackDim],
 			    ResidualGroup group = kAcceleration);
-	Result solve(float regularization, const NormalPrior &prior) const;
+	Result solve(float regularization) const;
 	uint16_t observationCount() const { return _observation_count; }
 
 private:
