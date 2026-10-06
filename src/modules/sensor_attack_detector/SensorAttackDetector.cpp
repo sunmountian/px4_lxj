@@ -635,6 +635,45 @@ bool SensorAttackDetector::integrateActuator(uint64_t start_timestamp, uint64_t 
 	return true;
 }
 
+bool SensorAttackDetector::interpolateActuatorAcceleration(uint64_t timestamp, float (&acceleration)[2]) const
+{
+	if (_imu_buffer.empty() || (timestamp < _imu_buffer.front().timestamp)
+	    || (timestamp > _imu_buffer.back().timestamp)) {
+		return false;
+	}
+
+	for (size_t i = 0; i < _imu_buffer.size(); ++i) {
+		const ImuEvent &upper = _imu_buffer[i];
+
+		if (upper.timestamp == timestamp) {
+			acceleration[0] = upper.acceleration_actuator[0];
+			acceleration[1] = upper.acceleration_actuator[1];
+			return true;
+		}
+
+		if ((upper.timestamp > timestamp) && (i > 0)) {
+			const ImuEvent &lower = _imu_buffer[i - 1];
+			const uint64_t gap = upper.timestamp - lower.timestamp;
+
+			if (gap == 0) {
+				return false;
+			}
+
+			const float alpha = static_cast<float>(timestamp - lower.timestamp) / static_cast<float>(gap);
+
+			for (size_t axis = 0; axis < 2; ++axis) {
+				acceleration[axis] = lower.acceleration_actuator[axis]
+						     + alpha * (upper.acceleration_actuator[axis] - lower.acceleration_actuator[axis]);
+			}
+
+			return PX4_ISFINITE(acceleration[0]) && PX4_ISFINITE(acceleration[1]);
+		}
+	}
+
+	return false;
+}
+
+
 bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 		AxisGlrtAccumulator::Result &north_result,
 		AxisGlrtAccumulator::Result &east_result,
@@ -652,6 +691,12 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 	}
 
 	const uint64_t start_timestamp = end_timestamp - kWindowDurationUs;
+
+	if (start_timestamp <= kDynamicLagUs) {
+		_data_quality_flags |= sensor_attack_status_s::DATA_QUALITY_WINDOW_COVERAGE;
+		return false;
+	}
+
 	GpsEvent gps_start{};
 
 	if (!interpolateGps(start_timestamp, gps_start)) {
@@ -681,6 +726,35 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 		const uint64_t half_duration_us = static_cast<uint64_t>(0.5f * event.dt_s * 1e6f);
 		const uint64_t center_timestamp = event.timestamp > half_duration_us ? event.timestamp - half_duration_us : 0;
 
+		if ((center_timestamp >= start_timestamp) && (center_timestamp <= end_timestamp)
+		    && (imu_sample_count < UINT16_MAX)) {
+			++imu_sample_count;
+		}
+	}
+
+	for (size_t i = 0; i < _gps_buffer.size(); ++i) {
+		const GpsEvent &event = _gps_buffer[i];
+
+		if ((event.timestamp > start_timestamp) && (event.timestamp <= end_timestamp)
+		    && (gps_sample_count < UINT16_MAX)) {
+			++gps_sample_count;
+		}
+	}
+
+	if ((imu_sample_count < 100) || (gps_sample_count < 4)) {
+		_data_quality_flags |= sensor_attack_status_s::DATA_QUALITY_WINDOW_COVERAGE;
+		return false;
+	}
+
+	const float acceleration_weight = _param_sad_wa.get() / static_cast<float>(imu_sample_count);
+	const float velocity_weight = _param_sad_wv.get() / static_cast<float>(gps_sample_count);
+	const float position_weight = _param_sad_wp.get() / static_cast<float>(gps_sample_count);
+
+	for (size_t i = 0; i < _imu_buffer.size(); ++i) {
+		const ImuEvent &event = _imu_buffer[i];
+		const uint64_t half_duration_us = static_cast<uint64_t>(0.5f * event.dt_s * 1e6f);
+		const uint64_t center_timestamp = event.timestamp > half_duration_us ? event.timestamp - half_duration_us : 0;
+
 		if ((center_timestamp < start_timestamp) || (center_timestamp > end_timestamp)) {
 			continue;
 		}
@@ -689,15 +763,27 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 				  / static_cast<float>(kWindowDurationUs);
 		float attack_basis[AttackBasis::kSize] {};
 		AttackBasis::evaluate(tau, attack_basis);
+		float delayed_acceleration[2] {};
+
+		if (!interpolateActuatorAcceleration(center_timestamp - kDynamicLagUs, delayed_acceleration)) {
+			_data_quality_flags |= sensor_attack_status_s::DATA_QUALITY_WINDOW_COVERAGE;
+			return false;
+		}
+
 		const float north_residual = event.acceleration_measured[0] - event.acceleration_actuator[0];
 		const float east_residual = event.acceleration_measured[1] - event.acceleration_actuator[1];
-		const float acceleration_normal_basis[AxisGlrtAccumulator::kNormalDim] {1.f, 0.f, 0.f};
-		north_accumulator.addObservation(north_residual, _param_sad_wa.get(), acceleration_normal_basis, attack_basis);
-		east_accumulator.addObservation(east_residual, _param_sad_wa.get(), acceleration_normal_basis, attack_basis);
-
-		if (imu_sample_count < UINT16_MAX) {
-			++imu_sample_count;
-		}
+		const float north_normal_basis[AxisGlrtAccumulator::kNormalDim] {
+			1.f,
+			event.acceleration_actuator[0],
+			event.acceleration_actuator[0] - delayed_acceleration[0]
+		};
+		const float east_normal_basis[AxisGlrtAccumulator::kNormalDim] {
+			1.f,
+			event.acceleration_actuator[1],
+			event.acceleration_actuator[1] - delayed_acceleration[1]
+		};
+		north_accumulator.addObservation(north_residual, acceleration_weight, north_normal_basis, attack_basis);
+		east_accumulator.addObservation(east_residual, acceleration_weight, east_normal_basis, attack_basis);
 	}
 
 	for (size_t i = 0; i < _gps_buffer.size(); ++i) {
@@ -714,7 +800,14 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 		float covered_time_s = 0.f;
 		integrateActuator(start_timestamp, event.timestamp, delta_velocity, delta_position, covered_time_s);
 
-		if (covered_time_s + static_cast<float>(kMaximumWindowGapUs) * 1e-6f < elapsed_s) {
+		float delayed_delta_velocity[2] {};
+		float delayed_delta_position[2] {};
+		float delayed_covered_time_s = 0.f;
+		integrateActuator(start_timestamp - kDynamicLagUs, event.timestamp - kDynamicLagUs,
+				  delayed_delta_velocity, delayed_delta_position, delayed_covered_time_s);
+
+		if ((covered_time_s + static_cast<float>(kMaximumWindowGapUs) * 1e-6f < elapsed_s)
+		    || (delayed_covered_time_s + static_cast<float>(kMaximumWindowGapUs) * 1e-6f < elapsed_s)) {
 			_data_quality_flags |= sensor_attack_status_s::DATA_QUALITY_WINDOW_COVERAGE;
 			return false;
 		}
@@ -733,31 +826,26 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 			const float velocity_residual = event.velocity[axis] - gps_start.velocity[axis] - delta_velocity[axis];
 			const float position_residual = event.position[axis] - gps_start.position[axis]
 							- elapsed_s * gps_start.velocity[axis] - delta_position[axis];
+			const float dynamic_velocity_basis = delta_velocity[axis] - delayed_delta_velocity[axis];
+			const float dynamic_position_basis = delta_position[axis] - delayed_delta_position[axis];
+			const float velocity_normal_basis[AxisGlrtAccumulator::kNormalDim] {
+				elapsed_s, delta_velocity[axis], dynamic_velocity_basis
+			};
+			const float position_normal_basis[AxisGlrtAccumulator::kNormalDim] {
+				0.5f * elapsed_s * elapsed_s, delta_position[axis], dynamic_position_basis
+			};
 
 			if (axis == 0) {
-				const float velocity_normal_basis[AxisGlrtAccumulator::kNormalDim] {elapsed_s, 0.f, 0.f};
-				const float position_normal_basis[AxisGlrtAccumulator::kNormalDim] {0.5f * elapsed_s * elapsed_s, 0.f, 0.f};
-				north_accumulator.addObservation(velocity_residual, _param_sad_wv.get(), velocity_normal_basis, velocity_basis);
-				north_accumulator.addObservation(position_residual, _param_sad_wp.get(),
+				north_accumulator.addObservation(velocity_residual, velocity_weight, velocity_normal_basis, velocity_basis);
+				north_accumulator.addObservation(position_residual, position_weight,
 								 position_normal_basis, position_basis);
 
 			} else {
-				const float velocity_normal_basis[AxisGlrtAccumulator::kNormalDim] {elapsed_s, 0.f, 0.f};
-				const float position_normal_basis[AxisGlrtAccumulator::kNormalDim] {0.5f * elapsed_s * elapsed_s, 0.f, 0.f};
-				east_accumulator.addObservation(velocity_residual, _param_sad_wv.get(), velocity_normal_basis, velocity_basis);
-				east_accumulator.addObservation(position_residual, _param_sad_wp.get(),
+				east_accumulator.addObservation(velocity_residual, velocity_weight, velocity_normal_basis, velocity_basis);
+				east_accumulator.addObservation(position_residual, position_weight,
 								position_normal_basis, position_basis);
 			}
 		}
-
-		if (gps_sample_count < UINT16_MAX) {
-			++gps_sample_count;
-		}
-	}
-
-	if ((imu_sample_count < 100) || (gps_sample_count < 4)) {
-		_data_quality_flags |= sensor_attack_status_s::DATA_QUALITY_WINDOW_COVERAGE;
-		return false;
 	}
 
 	AxisGlrtAccumulator::NormalPrior normal_prior{};
