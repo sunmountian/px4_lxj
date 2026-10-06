@@ -22,6 +22,10 @@ bool imu_valid
 float32 glrt_score_n
 float32 glrt_score_e
 float32 glrt_score
+float32 cost_null_n
+float32 cost_null_e
+float32 cost_attack_n
+float32 cost_attack_e
 float32 normalized_score
 float32 cusum_score
 float32 threshold
