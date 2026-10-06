@@ -196,10 +196,12 @@ TEST(AxisGlrtAccumulator, PureNormalColumnHasNoAttackEvidence)
 			const float normal_basis[AxisGlrtAccumulator::kNormalDim] {1.f, 0.f, 0.f};
 			accumulator.addObservation(2.5f, 1.f, normal_basis, acceleration_basis);
 		}
+
 		{
 			const float normal_basis[AxisGlrtAccumulator::kNormalDim] {time, 0.f, 0.f};
 			accumulator.addObservation(2.5f * time, 1.f, normal_basis, velocity_basis);
 		}
+
 		{
 			const float normal_basis[AxisGlrtAccumulator::kNormalDim] {0.5f * time * time, 0.f, 0.f};
 			accumulator.addObservation(1.25f * time * time, 1.f, normal_basis, position_basis);
@@ -254,7 +256,7 @@ TEST(AxisGlrtAccumulator, StructuredAttackProducesPositiveEvidence)
 		{
 			const float normal_basis[AxisGlrtAccumulator::kNormalDim] {0.5f * time * time, 0.f, 0.f};
 			accumulator.addObservation(0.5f * normal * time * time + attack_position, 1.f,
-					   normal_basis, position_basis);
+						   normal_basis, position_basis);
 		}
 	}
 
