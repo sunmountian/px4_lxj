@@ -1,0 +1,39 @@
+name: Sensor Attack Detector V2 Threshold Only
+
+on:
+  push:
+    branches:
+      - sad-v2-experiment
+    paths:
+      - '.github/workflows/sad_v2_threshold_only.yml'
+
+jobs:
+  threshold:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Install pyulog
+        run: python3 -m pip install --disable-pip-version-check pyulog numpy
+      - name: Reuse five-flight nominal artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sad-v2-sweep
+          path: build
+          github-token: ${{ github.token }}
+          run-id: 37457914689
+      - name: Calibrate development threshold
+        run: |
+          set -eux
+          python3 Tools/sensor_attack_detector/calibrate_thresholds.py \
+            --manifest build/sad_v2_smoke/sweep/threshold_manifest.csv \
+            --false-alarm-rate 0.05 --drift 0.5 --consecutive 3 \
+            --output build/sad_v2_smoke/sweep/thresholds.json
+          cat build/sad_v2_smoke/sweep/thresholds.json
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: sad-v2-threshold-only
+          path: build/sad_v2_smoke/sweep/thresholds*
+          retention-days: 3
