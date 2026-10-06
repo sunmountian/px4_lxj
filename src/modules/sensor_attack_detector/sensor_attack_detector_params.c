@@ -117,16 +117,20 @@ PARAM_DEFINE_FLOAT(SAD_REG, 0.1f);
 
 
 /**
- * Nominal actuator-scale residual coefficient mean
+ * Fixed nominal actuator-scale correction coefficient
  *
- * Experimental V2 parameter. Recalibrate from nominal flights before use.
+ * Calibrate from dedicated nominal maneuver flights before detector
+ * normalization or threshold calibration.
  *
  * @group Sensor Attack Detector
  */
 PARAM_DEFINE_FLOAT(SAD_AS_MU, 0.f);
 
 /**
- * Nominal actuator-scale residual coefficient standard deviation
+ * Legacy V2 actuator-scale prior width
+ *
+ * Retained for experiment compatibility. The fixed 7x7 detector does not
+ * read this parameter.
  *
  * @min 0.001
  * @group Sensor Attack Detector
@@ -134,16 +138,20 @@ PARAM_DEFINE_FLOAT(SAD_AS_MU, 0.f);
 PARAM_DEFINE_FLOAT(SAD_AS_SD, 1.f);
 
 /**
- * Nominal actuator-dynamic residual coefficient mean
+ * Fixed nominal actuator-dynamic correction coefficient
  *
- * Experimental V2 parameter. Recalibrate from nominal flights before use.
+ * Calibrate from dedicated nominal maneuver flights before detector
+ * normalization or threshold calibration.
  *
  * @group Sensor Attack Detector
  */
 PARAM_DEFINE_FLOAT(SAD_AD_MU, 0.f);
 
 /**
- * Nominal actuator-dynamic residual coefficient standard deviation
+ * Legacy V2 actuator-dynamic prior width
+ *
+ * Retained for experiment compatibility. The fixed 7x7 detector does not
+ * read this parameter.
  *
  * @min 0.001
  * @group Sensor Attack Detector
