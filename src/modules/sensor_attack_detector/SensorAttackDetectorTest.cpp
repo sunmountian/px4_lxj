@@ -155,13 +155,11 @@ TEST(AttackBasis, SecondDifferenceRegularization)
 
 	for (size_t i = 0; i < AttackBasis::kSize; ++i) {
 		for (size_t j = 0; j < AttackBasis::kSize; ++j) {
-			const float constant_i = 1.f;
-			const float constant_j = 1.f;
 			const float linear_i = static_cast<float>(i);
 			const float linear_j = static_cast<float>(j);
 			const float curved_i = static_cast<float>(i * i);
 			const float curved_j = static_cast<float>(j * j);
-			constant_penalty += constant_i * matrix[1 + i][1 + j] * constant_j;
+			constant_penalty += matrix[1 + i][1 + j];
 			linear_penalty += linear_i * matrix[1 + i][1 + j] * linear_j;
 			curved_penalty += curved_i * matrix[1 + i][1 + j] * curved_j;
 		}
@@ -172,7 +170,7 @@ TEST(AttackBasis, SecondDifferenceRegularization)
 	EXPECT_GT(curved_penalty, 1.f);
 }
 
-TEST(AxisGlrtAccumulator, PureNormalColumnHasNoAttackEvidence)
+TEST(AxisGlrtAccumulator, PureBiasColumnHasNoAttackEvidence)
 {
 	AxisGlrtAccumulator accumulator;
 	accumulator.reset();
@@ -192,26 +190,17 @@ TEST(AxisGlrtAccumulator, PureNormalColumnHasNoAttackEvidence)
 			position_basis[i] *= kWindowSeconds * kWindowSeconds;
 		}
 
-		{
-			const float normal_basis[AxisGlrtAccumulator::kNormalDim] {1.f, 0.f, 0.f};
-			accumulator.addObservation(2.5f, 1.f, normal_basis, acceleration_basis);
-		}
-
-		{
-			const float normal_basis[AxisGlrtAccumulator::kNormalDim] {time, 0.f, 0.f};
-			accumulator.addObservation(2.5f * time, 1.f, normal_basis, velocity_basis);
-		}
-
-		{
-			const float normal_basis[AxisGlrtAccumulator::kNormalDim] {0.5f * time * time, 0.f, 0.f};
-			accumulator.addObservation(1.25f * time * time, 1.f, normal_basis, position_basis);
-		}
+		const float acceleration_normal[AxisGlrtAccumulator::kNormalDim] {1.f};
+		const float velocity_normal[AxisGlrtAccumulator::kNormalDim] {time};
+		const float position_normal[AxisGlrtAccumulator::kNormalDim] {0.5f * time * time};
+		accumulator.addObservation(2.5f, 1.f, acceleration_normal, acceleration_basis);
+		accumulator.addObservation(2.5f * time, 1.f, velocity_normal, velocity_basis,
+					   AxisGlrtAccumulator::kVelocity);
+		accumulator.addObservation(1.25f * time * time, 1.f, position_normal, position_basis,
+					   AxisGlrtAccumulator::kPosition);
 	}
 
-	AxisGlrtAccumulator::NormalPrior prior{};
-	prior.precision[1] = 1.f;
-	prior.precision[2] = 1.f;
-	const AxisGlrtAccumulator::Result result = accumulator.solve(0.1f, prior);
+	const AxisGlrtAccumulator::Result result = accumulator.solve(0.1f);
 	ASSERT_TRUE(result.valid);
 	EXPECT_NEAR(result.glrt, 0.f, 2e-2f);
 	EXPECT_NEAR(result.normal_parameters[0], 2.5f, 1e-4f);
@@ -245,99 +234,19 @@ TEST(AxisGlrtAccumulator, StructuredAttackProducesPositiveEvidence)
 		}
 
 		const float normal = 0.3f;
-		{
-			const float normal_basis[AxisGlrtAccumulator::kNormalDim] {1.f, 0.f, 0.f};
-			accumulator.addObservation(normal + attack_acceleration, 1.f, normal_basis, acceleration_basis);
-		}
-		{
-			const float normal_basis[AxisGlrtAccumulator::kNormalDim] {time, 0.f, 0.f};
-			accumulator.addObservation(normal * time + attack_velocity, 1.f, normal_basis, velocity_basis);
-		}
-		{
-			const float normal_basis[AxisGlrtAccumulator::kNormalDim] {0.5f * time * time, 0.f, 0.f};
-			accumulator.addObservation(0.5f * normal * time * time + attack_position, 1.f,
-						   normal_basis, position_basis);
-		}
+		const float acceleration_normal[AxisGlrtAccumulator::kNormalDim] {1.f};
+		const float velocity_normal[AxisGlrtAccumulator::kNormalDim] {time};
+		const float position_normal[AxisGlrtAccumulator::kNormalDim] {0.5f * time * time};
+		accumulator.addObservation(normal + attack_acceleration, 1.f, acceleration_normal, acceleration_basis);
+		accumulator.addObservation(normal * time + attack_velocity, 1.f, velocity_normal, velocity_basis,
+					   AxisGlrtAccumulator::kVelocity);
+		accumulator.addObservation(0.5f * normal * time * time + attack_position, 1.f,
+					   position_normal, position_basis, AxisGlrtAccumulator::kPosition);
 	}
 
-	AxisGlrtAccumulator::NormalPrior prior{};
-	prior.precision[1] = 1.f;
-	prior.precision[2] = 1.f;
-	const AxisGlrtAccumulator::Result result = accumulator.solve(0.01f, prior);
+	const AxisGlrtAccumulator::Result result = accumulator.solve(0.01f);
 	ASSERT_TRUE(result.valid);
 	EXPECT_GT(result.glrt, 10.f);
-	EXPECT_LT(result.cost_attack, result.cost_null);
-}
-
-
-TEST(AxisGlrtAccumulator, V2PhysicalNormalModelAbsorbsNominalDynamics)
-{
-	AxisGlrtAccumulator accumulator;
-	accumulator.reset();
-	constexpr float alpha = 0.08f;
-	constexpr float beta = -0.6f;
-
-	for (int sample = 0; sample <= 80; ++sample) {
-		const float tau = static_cast<float>(sample) / 80.f;
-		const float time = kWindowSeconds * tau;
-		const float actuator = 0.8f * sinf(0.7f * time) + 0.3f * cosf(0.25f * time);
-		const float delayed = 0.8f * sinf(0.7f * fmaxf(0.f, time - 0.2f))
-				      + 0.3f * cosf(0.25f * fmaxf(0.f, time - 0.2f));
-		const float dynamic = actuator - delayed;
-		const float observation = 0.05f + alpha * actuator + beta * dynamic;
-		float attack_basis[AttackBasis::kSize] {};
-		AttackBasis::evaluate(tau, attack_basis);
-		const float normal_basis[AxisGlrtAccumulator::kNormalDim] {1.f, actuator, dynamic};
-		accumulator.addObservation(observation, 1.f, normal_basis, attack_basis);
-	}
-
-	AxisGlrtAccumulator::NormalPrior prior{};
-	prior.mean[1] = alpha;
-	prior.mean[2] = beta;
-	prior.precision[1] = 1.f / (0.05f * 0.05f);
-	prior.precision[2] = 1.f / (0.25f * 0.25f);
-	const AxisGlrtAccumulator::Result result = accumulator.solve(0.1f, prior);
-	ASSERT_TRUE(result.valid);
-	EXPECT_NEAR(result.glrt, 0.f, 2e-2f);
-	EXPECT_NEAR(result.normal_parameters[0], 0.05f, 2e-3f);
-}
-
-TEST(AxisGlrtAccumulator, V2PriorPreservesStructuredAttackEvidence)
-{
-	AxisGlrtAccumulator accumulator;
-	accumulator.reset();
-	constexpr float alpha = 0.08f;
-	constexpr float beta = -0.6f;
-	const float coefficients[AttackBasis::kSize] {1.2f, -0.5f, -1.1f, 0.2f, 0.9f, -0.7f};
-
-	for (int sample = 0; sample <= 80; ++sample) {
-		const float tau = static_cast<float>(sample) / 80.f;
-		const float time = kWindowSeconds * tau;
-		const float actuator = 0.8f * sinf(0.7f * time) + 0.3f * cosf(0.25f * time);
-		const float delayed = 0.8f * sinf(0.7f * fmaxf(0.f, time - 0.2f))
-				      + 0.3f * cosf(0.25f * fmaxf(0.f, time - 0.2f));
-		const float dynamic = actuator - delayed;
-		float attack_basis[AttackBasis::kSize] {};
-		AttackBasis::evaluate(tau, attack_basis);
-		float attack = 0.f;
-
-		for (size_t i = 0; i < AttackBasis::kSize; ++i) {
-			attack += attack_basis[i] * coefficients[i];
-		}
-
-		const float observation = 0.05f + alpha * actuator + beta * dynamic + attack;
-		const float normal_basis[AxisGlrtAccumulator::kNormalDim] {1.f, actuator, dynamic};
-		accumulator.addObservation(observation, 1.f, normal_basis, attack_basis);
-	}
-
-	AxisGlrtAccumulator::NormalPrior prior{};
-	prior.mean[1] = alpha;
-	prior.mean[2] = beta;
-	prior.precision[1] = 1.f / (0.05f * 0.05f);
-	prior.precision[2] = 1.f / (0.25f * 0.25f);
-	const AxisGlrtAccumulator::Result result = accumulator.solve(0.01f, prior);
-	ASSERT_TRUE(result.valid);
-	EXPECT_GT(result.glrt, 5.f);
 	EXPECT_LT(result.cost_attack, result.cost_null);
 }
 
@@ -347,16 +256,11 @@ TEST(AxisGlrtAccumulator, DegenerateSystemIsRejected)
 	accumulator.reset();
 	float basis[AttackBasis::kSize] {};
 	AttackBasis::evaluate(0.5f, basis);
+	const float normal_basis[AxisGlrtAccumulator::kNormalDim] {1.f};
 
 	for (int i = 0; i < 20; ++i) {
-		{
-			const float normal_basis[AxisGlrtAccumulator::kNormalDim] {1.f, 0.f, 0.f};
-			accumulator.addObservation(1.f, 1.f, normal_basis, basis);
-		}
+		accumulator.addObservation(1.f, 1.f, normal_basis, basis);
 	}
 
-	AxisGlrtAccumulator::NormalPrior prior{};
-	prior.precision[1] = 1.f;
-	prior.precision[2] = 1.f;
-	EXPECT_FALSE(accumulator.solve(0.1f, prior).valid);
+	EXPECT_FALSE(accumulator.solve(0.1f).valid);
 }
