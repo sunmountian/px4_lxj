@@ -263,6 +263,47 @@ def send_velocity_setpoint(master, vn, ve, vd=0.0):
     )
 
 
+def takeoff_offboard(master, altitude_m, rate_hz=20.0, timeout_s=45.0):
+    # PX4 pre-arm checks require us to leave the default Manual main state
+    # when no RC/manual-control stream exists. Prime Offboard setpoints first,
+    # switch to Offboard, then arm and climb with a NED vertical velocity.
+    for _ in range(int(rate_hz)):
+        send_velocity_setpoint(master, 0.0, 0.0, 0.0)
+        master.recv_match(type="LOCAL_POSITION_NED", blocking=True, timeout=0.01)
+        time.sleep(1.0 / rate_hz)
+
+    set_px4_mode(
+        master,
+        "OFFBOARD",
+        keepalive=lambda: send_velocity_setpoint(master, 0.0, 0.0, 0.0),
+    )
+    force_arm(master)
+
+    deadline = time.monotonic() + timeout_s
+    reached_altitude = False
+
+    while time.monotonic() < deadline:
+        send_velocity_setpoint(
+            master,
+            0.0,
+            0.0,
+            0.0 if reached_altitude else -0.8,
+        )
+        message = master.recv_match(
+            type="LOCAL_POSITION_NED", blocking=True, timeout=0.05
+        )
+
+        if message is not None and float(message.z) <= -(altitude_m - 0.2):
+            reached_altitude = True
+
+        if reached_altitude:
+            return
+
+        time.sleep(max(0.0, 1.0 / rate_hz - 0.01))
+
+    raise TimeoutError("offboard takeoff altitude not reached")
+
+
 def stream_velocity(master, velocity_function, duration_s, rate_hz):
     start = time.monotonic()
     next_send = start
@@ -511,8 +552,11 @@ def main():
             master = mavutil.mavlink_connection(args.url, autoreconnect=True)
             master.wait_heartbeat(timeout=60)
             request_local_position(master)
-            force_arm(master)
-            shell(process, "commander takeoff", 0.5)
+            takeoff_offboard(
+                master,
+                args.takeoff_altitude,
+                rate_hz=args.setpoint_rate,
+            )
             wait_stable_hover(master, args.takeoff_altitude)
 
             if args.scenario == "turn":
