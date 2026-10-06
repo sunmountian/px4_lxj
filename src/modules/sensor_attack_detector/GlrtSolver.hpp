@@ -8,6 +8,8 @@
 
 #include "AttackBasis.hpp"
 
+#include <float.h>
+#include <math.h>
 #include <stddef.h>
 #include <stdint.h>
 
