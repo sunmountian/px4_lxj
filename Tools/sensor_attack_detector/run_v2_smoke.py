@@ -191,6 +191,41 @@ def set_px4_mode(master, mode, timeout_s=20.0, keepalive=None):
     raise TimeoutError(f"vehicle did not enter {mode}")
 
 
+def wait_armed(master, timeout_s=20.0):
+    deadline = time.monotonic() + timeout_s
+
+    while time.monotonic() < deadline:
+        heartbeat = master.recv_match(type="HEARTBEAT", blocking=True, timeout=0.5)
+
+        if heartbeat is None or heartbeat.get_srcSystem() != master.target_system:
+            continue
+
+        if int(heartbeat.base_mode) & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED:
+            return
+
+    raise TimeoutError("vehicle did not arm")
+
+
+def force_arm(master):
+    ack = command_long(
+        master,
+        mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
+        [1.0, 21196.0, 0, 0, 0, 0, 0],
+        timeout_s=10.0,
+    )
+
+    if ack is None:
+        raise TimeoutError("force-arm command was not acknowledged")
+
+    if ack.result not in (
+        mavutil.mavlink.MAV_RESULT_ACCEPTED,
+        mavutil.mavlink.MAV_RESULT_IN_PROGRESS,
+    ):
+        raise RuntimeError(f"force-arm command rejected with result {ack.result}")
+
+    wait_armed(master)
+
+
 def request_local_position(master, rate_hz=20.0):
     command_long(
         master,
@@ -472,11 +507,12 @@ def main():
         try:
             wait_for_log_text(run_log, "Startup script returned successfully", 120)
             parameters = apply_detector_parameters(process, args)
-            shell(process, "commander takeoff", 0.2)
 
             master = mavutil.mavlink_connection(args.url, autoreconnect=True)
             master.wait_heartbeat(timeout=60)
             request_local_position(master)
+            force_arm(master)
+            shell(process, "commander takeoff", 0.5)
             wait_stable_hover(master, args.takeoff_altitude)
 
             if args.scenario == "turn":
