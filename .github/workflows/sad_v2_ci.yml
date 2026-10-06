@@ -1,0 +1,35 @@
+name: Sensor Attack Detector V2 CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/sad_v2_ci.yml'
+      - 'src/modules/sensor_attack_detector/**'
+      - 'msg/sensor_attack_status.msg'
+      - 'Tools/sensor_attack_detector/**'
+
+jobs:
+  v2-build-test:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-nuttx-focal:2021-09-08
+      options: --privileged --ulimit core=-1 --security-opt seccomp=unconfined
+    steps:
+      - uses: actions/checkout@v1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          token: ${{ secrets.ACCESS_TOKEN }}
+
+      - name: Provide valid PX4 version for experimental CI
+        run: |
+          git config user.email "ci@example.invalid"
+          git config user.name "SAD V2 CI"
+          git tag -f v1.13.0-0.1.0 HEAD
+
+      - name: Build and run unit tests
+        run: make tests
+
+      - name: Build PX4 SITL
+        run: make px4_sitl_default
