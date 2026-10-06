@@ -284,6 +284,7 @@ def apply_detector_parameters(process, args):
         "COM_RCL_EXCEPT": 7,
         "COM_RC_IN_MODE": 4,
         "COM_OF_LOSS_T": 2.0,
+        "MIS_TAKEOFF_ALT": args.takeoff_altitude,
         "SAD_THR_GAIN": args.thr_gain,
         "SAD_WA": args.weight_acceleration,
         "SAD_WV": args.weight_velocity,
