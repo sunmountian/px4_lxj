@@ -439,7 +439,7 @@ def summarize_detector(ulog_path, scenario):
         marker_timestamp = None
 
         for timestamp, name, value in ulog.changed_parameters:
-            if name == "SAD_THRESH" and math.isclose(float(value), 999999.0):
+            if name == "SAD_THRESH":
                 marker_timestamp = int(timestamp)
 
         if marker_timestamp is not None:
@@ -651,10 +651,14 @@ def main():
                 event_times.update(run_turn(master, args))
 
             else:
-                # Leave an exact in-ULog marker without changing detector
-                # behavior: both thresholds are intentionally unreachable in
-                # raw-score smoke mode.
-                shell(process, "param set SAD_THRESH 999999", 0.15)
+                # Leave an in-ULog attack-onset marker while keeping the
+                # sequential threshold effectively unchanged.
+                marker_delta = max(1e-3, abs(args.threshold) * 1e-6)
+                shell(
+                    process,
+                    f"param set SAD_THRESH {args.threshold + marker_delta}",
+                    0.15,
+                )
                 trigger_file.write_text("trigger\n", encoding="utf-8")
                 event_times["attack_trigger_wall"] = time.time()
                 stream_velocity(
