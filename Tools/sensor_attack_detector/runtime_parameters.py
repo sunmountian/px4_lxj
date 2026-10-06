@@ -7,6 +7,14 @@ import time
 
 PARAMETER_ENVIRONMENT = {
     "SAD_THR_GAIN": "SAD_CAL_THR_GAIN",
+    "SAD_WA": "SAD_CAL_WA",
+    "SAD_WV": "SAD_CAL_WV",
+    "SAD_WP": "SAD_CAL_WP",
+    "SAD_REG": "SAD_CAL_REG",
+    "SAD_AS_MU": "SAD_CAL_AS_MU",
+    "SAD_AS_SD": "SAD_CAL_AS_SD",
+    "SAD_AD_MU": "SAD_CAL_AD_MU",
+    "SAD_AD_SD": "SAD_CAL_AD_SD",
     "SAD_GLRT_MU": "SAD_CAL_GLRT_MU",
     "SAD_GLRT_SD": "SAD_CAL_GLRT_SD",
     "SAD_CUS_DR": "SAD_CAL_CUS_DR",
