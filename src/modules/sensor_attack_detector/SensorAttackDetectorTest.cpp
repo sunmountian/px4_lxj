@@ -267,6 +267,78 @@ TEST(AxisGlrtAccumulator, StructuredAttackProducesPositiveEvidence)
 	EXPECT_LT(result.cost_attack, result.cost_null);
 }
 
+
+TEST(AxisGlrtAccumulator, V2PhysicalNormalModelAbsorbsNominalDynamics)
+{
+	AxisGlrtAccumulator accumulator;
+	accumulator.reset();
+	constexpr float alpha = 0.08f;
+	constexpr float beta = -0.6f;
+
+	for (int sample = 0; sample <= 80; ++sample) {
+		const float tau = static_cast<float>(sample) / 80.f;
+		const float time = kWindowSeconds * tau;
+		const float actuator = 0.8f * sinf(0.7f * time) + 0.3f * cosf(0.25f * time);
+		const float delayed = 0.8f * sinf(0.7f * fmaxf(0.f, time - 0.2f))
+				      + 0.3f * cosf(0.25f * fmaxf(0.f, time - 0.2f));
+		const float dynamic = actuator - delayed;
+		const float observation = 0.05f + alpha * actuator + beta * dynamic;
+		float attack_basis[AttackBasis::kSize] {};
+		AttackBasis::evaluate(tau, attack_basis);
+		const float normal_basis[AxisGlrtAccumulator::kNormalDim] {1.f, actuator, dynamic};
+		accumulator.addObservation(observation, 1.f, normal_basis, attack_basis);
+	}
+
+	AxisGlrtAccumulator::NormalPrior prior{};
+	prior.mean[1] = alpha;
+	prior.mean[2] = beta;
+	prior.precision[1] = 1.f / (0.05f * 0.05f);
+	prior.precision[2] = 1.f / (0.25f * 0.25f);
+	const AxisGlrtAccumulator::Result result = accumulator.solve(0.1f, prior);
+	ASSERT_TRUE(result.valid);
+	EXPECT_NEAR(result.glrt, 0.f, 2e-2f);
+	EXPECT_NEAR(result.normal_parameters[0], 0.05f, 2e-3f);
+}
+
+TEST(AxisGlrtAccumulator, V2PriorPreservesStructuredAttackEvidence)
+{
+	AxisGlrtAccumulator accumulator;
+	accumulator.reset();
+	constexpr float alpha = 0.08f;
+	constexpr float beta = -0.6f;
+	const float coefficients[AttackBasis::kSize] {1.2f, -0.5f, -1.1f, 0.2f, 0.9f, -0.7f};
+
+	for (int sample = 0; sample <= 80; ++sample) {
+		const float tau = static_cast<float>(sample) / 80.f;
+		const float time = kWindowSeconds * tau;
+		const float actuator = 0.8f * sinf(0.7f * time) + 0.3f * cosf(0.25f * time);
+		const float delayed = 0.8f * sinf(0.7f * fmaxf(0.f, time - 0.2f))
+				      + 0.3f * cosf(0.25f * fmaxf(0.f, time - 0.2f));
+		const float dynamic = actuator - delayed;
+		float attack_basis[AttackBasis::kSize] {};
+		AttackBasis::evaluate(tau, attack_basis);
+		float attack = 0.f;
+
+		for (size_t i = 0; i < AttackBasis::kSize; ++i) {
+			attack += attack_basis[i] * coefficients[i];
+		}
+
+		const float observation = 0.05f + alpha * actuator + beta * dynamic + attack;
+		const float normal_basis[AxisGlrtAccumulator::kNormalDim] {1.f, actuator, dynamic};
+		accumulator.addObservation(observation, 1.f, normal_basis, attack_basis);
+	}
+
+	AxisGlrtAccumulator::NormalPrior prior{};
+	prior.mean[1] = alpha;
+	prior.mean[2] = beta;
+	prior.precision[1] = 1.f / (0.05f * 0.05f);
+	prior.precision[2] = 1.f / (0.25f * 0.25f);
+	const AxisGlrtAccumulator::Result result = accumulator.solve(0.01f, prior);
+	ASSERT_TRUE(result.valid);
+	EXPECT_GT(result.glrt, 5.f);
+	EXPECT_LT(result.cost_attack, result.cost_null);
+}
+
 TEST(AxisGlrtAccumulator, DegenerateSystemIsRejected)
 {
 	AxisGlrtAccumulator accumulator;
