@@ -23,6 +23,25 @@ jobs:
           path: build
           github-token: ${{ github.token }}
           run-id: 37457914689
+      - name: Rewrite artifact manifest paths
+        run: |
+          python3 - <<'PY'
+          import csv
+          from pathlib import Path
+          p=Path("build/sad_v2_smoke/sweep/threshold_manifest.csv")
+          rows=list(csv.DictReader(p.open()))
+          roots=list(Path("build/px4_sitl_default/tmp/rootfs/log").rglob("*.ulg"))
+          by_name={x.name:x for x in roots}
+          for row in rows:
+              name=Path(row["ulog"]).name
+              if name not in by_name:
+                  raise SystemExit(f"missing artifact ULog {name}")
+              row["ulog"]=str(by_name[name].resolve())
+          with p.open("w",newline="") as f:
+              w=csv.DictWriter(f,fieldnames=["flight_id","split","scenario","nominal","ulog"])
+              w.writeheader(); w.writerows(rows)
+          print(p.read_text())
+          PY
       - name: Calibrate development threshold
         run: |
           set -eux
