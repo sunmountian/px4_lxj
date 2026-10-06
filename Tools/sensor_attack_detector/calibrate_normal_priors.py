@@ -40,7 +40,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--minimum-valid-windows", type=int, default=20)
+    parser.add_argument("--minimum-valid-windows", type=int, default=20)\n    parser.add_argument("--minimum-flights", type=int, default=3)
     parser.add_argument("--minimum-scale-sd", type=float, default=0.02)
     parser.add_argument("--minimum-dynamic-sd", type=float, default=0.05)
     parser.add_argument("--minimum-bootstrap-scale-sd", type=float, default=20.0)
@@ -212,14 +212,17 @@ def load_flight(row, minimum_windows):
     }
 
 
-def equal_flight_moments(flights, prefix):
+def equal_flight_prior(flights, prefix):
+    """Estimate the physical prior from between-flight variation only.
+
+    Window-to-window variance under a deliberately broad bootstrap prior mostly
+    reflects estimator uncertainty and collinearity, not physical variation of
+    the normal-model coefficient. Each independent flight contributes one mean.
+    """
     means = np.asarray([flight[f"{prefix}_mean"] for flight in flights], dtype=float)
-    variances = np.asarray(
-        [flight[f"{prefix}_variance"] for flight in flights], dtype=float
-    )
     mean = float(np.mean(means))
-    variance = float(np.mean(variances + (means - mean) ** 2))
-    return mean, math.sqrt(max(0.0, variance))
+    standard_deviation = float(np.std(means, ddof=1))
+    return mean, standard_deviation
 
 
 def main():
@@ -228,14 +231,22 @@ def main():
     if args.minimum_valid_windows < 2:
         raise ValueError("--minimum-valid-windows must be at least two")
 
+    if args.minimum_flights < 2:
+        raise ValueError("--minimum-flights must be at least two")
+
     rows = read_manifest(args.manifest)
     flights = [
         load_flight(row, args.minimum_valid_windows)
         for row in rows
     ]
+    if len(flights) < args.minimum_flights:
+        raise ValueError(
+            f"need at least {args.minimum_flights} independent flights; got {len(flights)}"
+        )
+
     bootstrap_parameters = verify_bootstrap_parameters(flights, args)
-    scale_mean, scale_sd = equal_flight_moments(flights, "scale")
-    dynamic_mean, dynamic_sd = equal_flight_moments(flights, "dynamic")
+    scale_mean, scale_sd = equal_flight_prior(flights, "scale")
+    dynamic_mean, dynamic_sd = equal_flight_prior(flights, "dynamic")
     scale_sd = max(scale_sd, args.minimum_scale_sd)
     dynamic_sd = max(dynamic_sd, args.minimum_dynamic_sd)
     candidate = {
@@ -248,6 +259,7 @@ def main():
         "schema": "px4.sensor_attack_detector.normal_prior_calibration.v1",
         "nominal_only": True,
         "flight_weighting": "equal_independent_flight",
+        "prior_spread": "between_flight_means_only",
         "bootstrap_parameters": bootstrap_parameters,
         "candidate_parameters": candidate,
         "flights": [
