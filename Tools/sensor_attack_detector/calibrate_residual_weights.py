@@ -29,6 +29,9 @@ FROZEN_PARAMETERS = (
     "SAD_REG",
     "SAD_AS_MU",
     "SAD_AD_MU",
+    "SAD_WA",
+    "SAD_WV",
+    "SAD_WP",
 )
 
 
