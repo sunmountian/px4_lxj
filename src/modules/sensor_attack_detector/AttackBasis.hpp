@@ -121,7 +121,7 @@ public:
 			for (size_t i = 0; i < 3; ++i) {
 				for (size_t j = 0; j < 3; ++j) {
 					matrix[attack_offset + difference + i][attack_offset + difference + j]
-						+= lambda * row[i] * row[j];
+					+= lambda * row[i] * row[j];
 				}
 			}
 		}
