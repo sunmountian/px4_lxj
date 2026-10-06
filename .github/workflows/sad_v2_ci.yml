@@ -26,11 +26,13 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
-      - name: Provide valid PX4 version for experimental CI
+      - name: Provide valid PX4 and NuttX version metadata
         run: |
           set -eux
           git tag -f v1.13.0-0.0.1-dev HEAD
           git describe --tags --always --dirty
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          git -C platforms/nuttx/NuttX/nuttx tag | tail -n 20
 
       - name: Build and run unit tests
         run: |
