@@ -770,18 +770,16 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 			return false;
 		}
 
-		const float north_residual = event.acceleration_measured[0] - event.acceleration_actuator[0];
-		const float east_residual = event.acceleration_measured[1] - event.acceleration_actuator[1];
-		const float north_normal_basis[AxisGlrtAccumulator::kNormalDim] {
-			1.f,
-			event.acceleration_actuator[0],
-			event.acceleration_actuator[0] - delayed_acceleration[0]
-		};
-		const float east_normal_basis[AxisGlrtAccumulator::kNormalDim] {
-			1.f,
-			event.acceleration_actuator[1],
-			event.acceleration_actuator[1] - delayed_acceleration[1]
-		};
+		const float north_dynamic_basis = event.acceleration_actuator[0] - delayed_acceleration[0];
+		const float east_dynamic_basis = event.acceleration_actuator[1] - delayed_acceleration[1];
+		const float north_residual = event.acceleration_measured[0] - event.acceleration_actuator[0]
+					     - _param_sad_as_mu.get() * event.acceleration_actuator[0]
+					     - _param_sad_ad_mu.get() * north_dynamic_basis;
+		const float east_residual = event.acceleration_measured[1] - event.acceleration_actuator[1]
+					    - _param_sad_as_mu.get() * event.acceleration_actuator[1]
+					    - _param_sad_ad_mu.get() * east_dynamic_basis;
+		const float north_normal_basis[AxisGlrtAccumulator::kNormalDim] {1.f, 0.f, 0.f};
+		const float east_normal_basis[AxisGlrtAccumulator::kNormalDim] {1.f, 0.f, 0.f};
 		north_accumulator.addObservation(north_residual, acceleration_weight, north_normal_basis, attack_basis,
 						  AxisGlrtAccumulator::kAcceleration);
 		east_accumulator.addObservation(east_residual, acceleration_weight, east_normal_basis, attack_basis,
@@ -825,16 +823,18 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 		}
 
 		for (size_t axis = 0; axis < 2; ++axis) {
-			const float velocity_residual = event.velocity[axis] - gps_start.velocity[axis] - delta_velocity[axis];
-			const float position_residual = event.position[axis] - gps_start.position[axis]
-							- elapsed_s * gps_start.velocity[axis] - delta_position[axis];
 			const float dynamic_velocity_basis = delta_velocity[axis] - delayed_delta_velocity[axis];
 			const float dynamic_position_basis = delta_position[axis] - delayed_delta_position[axis];
-			const float velocity_normal_basis[AxisGlrtAccumulator::kNormalDim] {
-				elapsed_s, delta_velocity[axis], dynamic_velocity_basis
-			};
+			const float velocity_residual = event.velocity[axis] - gps_start.velocity[axis] - delta_velocity[axis]
+							- _param_sad_as_mu.get() * delta_velocity[axis]
+							- _param_sad_ad_mu.get() * dynamic_velocity_basis;
+			const float position_residual = event.position[axis] - gps_start.position[axis]
+							- elapsed_s * gps_start.velocity[axis] - delta_position[axis]
+							- _param_sad_as_mu.get() * delta_position[axis]
+							- _param_sad_ad_mu.get() * dynamic_position_basis;
+			const float velocity_normal_basis[AxisGlrtAccumulator::kNormalDim] {elapsed_s, 0.f, 0.f};
 			const float position_normal_basis[AxisGlrtAccumulator::kNormalDim] {
-				0.5f * elapsed_s * elapsed_s, delta_position[axis], dynamic_position_basis
+				0.5f * elapsed_s * elapsed_s, 0.f, 0.f
 			};
 
 			if (axis == 0) {
