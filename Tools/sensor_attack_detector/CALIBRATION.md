@@ -48,11 +48,14 @@ basis coefficients.
 
 Collect a dedicated nominal bootstrap set with sufficient maneuver excitation,
 especially turn entry, sustained turning, and turn exit. Estimate the common
-horizontal correction coefficients from nominal data only. The existing
-`calibrate_normal_priors.py` tool may still be used as a bootstrap estimator;
-for the fixed model only the reported means `SAD_AS_MU` and `SAD_AD_MU`
-are used online. The reported standard deviations are diagnostics/legacy
-experiment fields and do not enter the fixed-model GLRT.
+horizontal correction coefficients from nominal data only. The existing `calibrate_normal_priors.py` tool is a bootstrap estimator for
+ULogs collected with the earlier weak-prior V2 calibration model, where the
+scale/dynamic coefficients were still estimated online. It must not be run on
+final fixed-model ULogs, whose `normal_scale_*` and `normal_dynamic_*` status
+fields simply report the already frozen coefficients. For the fixed model only
+the bootstrap means `SAD_AS_MU` and `SAD_AD_MU` are used online. The reported
+standard deviations are diagnostics/legacy experiment fields and do not enter
+the fixed-model GLRT.
 
 Freeze `SAD_AS_MU` and `SAD_AD_MU` before collecting residual-weight,
 threshold-fit, calibration, or test flights. Bootstrap flights used to estimate
