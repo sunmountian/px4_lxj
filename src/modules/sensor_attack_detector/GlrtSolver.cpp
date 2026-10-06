@@ -31,13 +31,17 @@ void AxisGlrtAccumulator::reset()
 	memset(_normal_rhs, 0, sizeof(_normal_rhs));
 	memset(_joint_hessian, 0, sizeof(_joint_hessian));
 	memset(_joint_rhs, 0, sizeof(_joint_rhs));
+	memset(_group_normal_hessian, 0, sizeof(_group_normal_hessian));
+	memset(_group_normal_rhs, 0, sizeof(_group_normal_rhs));
+	memset(_group_squared_observation, 0, sizeof(_group_squared_observation));
+	memset(_group_observation_count, 0, sizeof(_group_observation_count));
 	_squared_observation = 0.f;
 	_observation_count = 0;
 }
 
 void AxisGlrtAccumulator::addObservation(float observation, float weight,
 		const float (&normal_basis)[kNormalDim],
-		const float (&attack_basis)[kAttackDim])
+		const float (&attack_basis)[kAttackDim], ResidualGroup group)
 {
 	if (!isfinite(observation) || !isfinite(weight) || !(weight > 0.f)) {
 		return;
@@ -62,6 +66,26 @@ void AxisGlrtAccumulator::addObservation(float observation, float weight,
 	}
 
 	_squared_observation += weight * observation * observation;
+
+	const size_t group_index = static_cast<size_t>(group);
+
+	if (group_index >= kResidualGroupCount) {
+		return;
+	}
+
+	_group_squared_observation[group_index] += observation * observation;
+
+	if (_group_observation_count[group_index] < UINT16_MAX) {
+		++_group_observation_count[group_index];
+	}
+
+	for (size_t i = 0; i < kNormalDim; ++i) {
+		_group_normal_rhs[group_index][i] += normal_basis[i] * observation;
+
+		for (size_t j = 0; j < kNormalDim; ++j) {
+			_group_normal_hessian[group_index][i][j] += normal_basis[i] * normal_basis[j];
+		}
+	}
 
 	for (size_t i = 0; i < kNormalDim; ++i) {
 		_normal_rhs[i] += weight * normal_basis[i] * observation;
@@ -186,6 +210,35 @@ AxisGlrtAccumulator::Result AxisGlrtAccumulator::solve(float regularization, con
 
 	for (size_t i = 0; i < kNormalDim; ++i) {
 		result.normal_parameters[i] = normal_solution[i];
+	}
+
+	for (size_t group = 0; group < kResidualGroupCount; ++group) {
+		if (_group_observation_count[group] == 0) {
+			result.normal_residual_rms[group] = NAN;
+			continue;
+		}
+
+		float group_cost = _group_squared_observation[group];
+
+		for (size_t i = 0; i < kNormalDim; ++i) {
+			group_cost -= 2.f * normal_solution[i] * _group_normal_rhs[group][i];
+
+			for (size_t j = 0; j < kNormalDim; ++j) {
+				group_cost += normal_solution[i]
+					      * _group_normal_hessian[group][i][j]
+					      * normal_solution[j];
+			}
+		}
+
+		const float group_tolerance = 1e-5f * fmaxf(1.f, _group_squared_observation[group]);
+
+		if ((group_cost < 0.f) && (group_cost > -group_tolerance)) {
+			group_cost = 0.f;
+		}
+
+		result.normal_residual_rms[group] = group_cost >= 0.f
+						 ? sqrtf(group_cost / static_cast<float>(_group_observation_count[group]))
+						 : NAN;
 	}
 
 	for (size_t i = 0; i < kAttackDim; ++i) {
