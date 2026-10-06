@@ -782,8 +782,8 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 			event.acceleration_actuator[1],
 			event.acceleration_actuator[1] - delayed_acceleration[1]
 		};
-		north_accumulator.addObservation(north_residual, acceleration_weight, north_normal_basis, attack_basis);
-		east_accumulator.addObservation(east_residual, acceleration_weight, east_normal_basis, attack_basis);
+		north_accumulator.addObservation(north_residual, acceleration_weight, north_normal_basis, attack_basis,\n\t\t\t\t\t\t  AxisGlrtAccumulator::kAcceleration);
+		east_accumulator.addObservation(east_residual, acceleration_weight, east_normal_basis, attack_basis,\n\t\t\t\t\t       AxisGlrtAccumulator::kAcceleration);
 	}
 
 	for (size_t i = 0; i < _gps_buffer.size(); ++i) {
@@ -836,12 +836,12 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 			};
 
 			if (axis == 0) {
-				north_accumulator.addObservation(velocity_residual, velocity_weight, velocity_normal_basis, velocity_basis);
+				north_accumulator.addObservation(velocity_residual, velocity_weight, velocity_normal_basis, velocity_basis,\n\t\t\t\t\t\t  AxisGlrtAccumulator::kVelocity);
 				north_accumulator.addObservation(position_residual, position_weight,
 								 position_normal_basis, position_basis);
 
 			} else {
-				east_accumulator.addObservation(velocity_residual, velocity_weight, velocity_normal_basis, velocity_basis);
+				east_accumulator.addObservation(velocity_residual, velocity_weight, velocity_normal_basis, velocity_basis,\n\t\t\t\t\t       AxisGlrtAccumulator::kVelocity);
 				east_accumulator.addObservation(position_residual, position_weight,
 								position_normal_basis, position_basis);
 			}
