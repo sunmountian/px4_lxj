@@ -22,6 +22,20 @@ except ImportError as exc:
     raise SystemExit("pyulog is required to calibrate normal priors") from exc
 
 
+BOOTSTRAP_PARAMETERS = (
+    "SAD_ACT_SRC",
+    "SAD_THR_GAIN",
+    "SAD_WA",
+    "SAD_WV",
+    "SAD_WP",
+    "SAD_REG",
+    "SAD_AS_MU",
+    "SAD_AS_SD",
+    "SAD_AD_MU",
+    "SAD_AD_SD",
+)
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, required=True)
@@ -29,6 +43,8 @@ def parse_args():
     parser.add_argument("--minimum-valid-windows", type=int, default=20)
     parser.add_argument("--minimum-scale-sd", type=float, default=0.02)
     parser.add_argument("--minimum-dynamic-sd", type=float, default=0.05)
+    parser.add_argument("--minimum-bootstrap-scale-sd", type=float, default=20.0)
+    parser.add_argument("--minimum-bootstrap-dynamic-sd", type=float, default=20.0)
     return parser.parse_args()
 
 
@@ -85,6 +101,44 @@ def get_dataset(ulog, name):
     return matches[0].data
 
 
+
+def get_effective_parameter(ulog, name):
+    value = ulog.initial_parameters.get(name)
+
+    for _, changed_name, changed_value in ulog.changed_parameters:
+        if changed_name == name:
+            value = changed_value
+
+    return value
+
+
+def verify_bootstrap_parameters(flights, args):
+    reference = flights[0]["parameters"]
+
+    for flight in flights[1:]:
+        for name in BOOTSTRAP_PARAMETERS:
+            left = float(reference[name])
+            right = float(flight["parameters"][name])
+
+            if not math.isclose(left, right, rel_tol=1e-7, abs_tol=1e-7):
+                raise ValueError(
+                    f"{flight['flight_id']}: {name}={right} does not match {left}"
+                )
+
+    if float(reference["SAD_AS_SD"]) < args.minimum_bootstrap_scale_sd:
+        raise ValueError(
+            "bootstrap SAD_AS_SD is too narrow for prior calibration: "
+            f"{reference['SAD_AS_SD']} < {args.minimum_bootstrap_scale_sd}"
+        )
+
+    if float(reference["SAD_AD_SD"]) < args.minimum_bootstrap_dynamic_sd:
+        raise ValueError(
+            "bootstrap SAD_AD_SD is too narrow for prior calibration: "
+            f"{reference['SAD_AD_SD']} < {args.minimum_bootstrap_dynamic_sd}"
+        )
+
+    return {name: float(reference[name]) for name in BOOTSTRAP_PARAMETERS}
+
 def load_flight(row, minimum_windows):
     ulog = ULog(str(row["ulog"]), None, disable_str_exceptions=True)
     status = get_dataset(ulog, "sensor_attack_status")
@@ -104,6 +158,19 @@ def load_flight(row, minimum_windows):
 
     if np.count_nonzero(np.asarray(vehicle_status["failsafe"], dtype=bool)):
         raise ValueError(f"{row['flight_id']}: nominal flight contains failsafe samples")
+
+    parameters = {
+        name: get_effective_parameter(ulog, name)
+        for name in BOOTSTRAP_PARAMETERS
+    }
+    missing_parameters = sorted(
+        name for name, value in parameters.items() if value is None
+    )
+
+    if missing_parameters:
+        raise ValueError(
+            f"{row['flight_id']}: missing bootstrap parameters: {missing_parameters}"
+        )
 
     valid = np.asarray(status["valid"], dtype=bool)
     quality = np.asarray(status["data_quality_flags"], dtype=np.uint32)
@@ -136,6 +203,7 @@ def load_flight(row, minimum_windows):
     dynamic_values = dynamic[usable].reshape(-1)
     return {
         **row,
+        "parameters": parameters,
         "usable_windows": int(np.count_nonzero(usable)),
         "scale_mean": float(np.mean(scale_values)),
         "scale_variance": float(np.var(scale_values, ddof=1)),
@@ -165,6 +233,7 @@ def main():
         load_flight(row, args.minimum_valid_windows)
         for row in rows
     ]
+    bootstrap_parameters = verify_bootstrap_parameters(flights, args)
     scale_mean, scale_sd = equal_flight_moments(flights, "scale")
     dynamic_mean, dynamic_sd = equal_flight_moments(flights, "dynamic")
     scale_sd = max(scale_sd, args.minimum_scale_sd)
@@ -179,6 +248,7 @@ def main():
         "schema": "px4.sensor_attack_detector.normal_prior_calibration.v1",
         "nominal_only": True,
         "flight_weighting": "equal_independent_flight",
+        "bootstrap_parameters": bootstrap_parameters,
         "candidate_parameters": candidate,
         "flights": [
             {**flight, "ulog": str(flight["ulog"])}
