@@ -40,7 +40,7 @@ jobs:
           make px4_sitl_default
           make px4_sitl_default sitl_gazebo
 
-      - name: Nominal smooth turn
+      - name: Bootstrap nominal smooth turn
         run: |
           set -eux
           python3 Tools/sensor_attack_detector/run_v2_smoke.py \
@@ -52,6 +52,42 @@ jobs:
             --normal-scale-sd 100 \
             --normal-dynamic-sd 100
 
+      - name: Calibrate development normal priors
+        id: priors
+        run: |
+          set -eux
+          RESULT_JSON="$(find build/sad_v2_smoke -name result.json -type f | sort | tail -n 1)"
+          ULOG="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ulog"])' "$RESULT_JSON")"
+          mkdir -p build/sad_v2_smoke/calibration
+          printf 'flight_id,scenario,nominal,ulog\nbootstrap_turn,turn,1,%s\n' "$ULOG" \
+            > build/sad_v2_smoke/calibration/prior_manifest.csv
+          python3 Tools/sensor_attack_detector/calibrate_normal_priors.py \
+            --manifest build/sad_v2_smoke/calibration/prior_manifest.csv \
+            --output build/sad_v2_smoke/calibration/normal_priors.json
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          report = json.load(open("build/sad_v2_smoke/calibration/normal_priors.json"))
+          p = report["candidate_parameters"]
+          print(f"as_mu={p['SAD_AS_MU']}")
+          print(f"as_sd={p['SAD_AS_SD']}")
+          print(f"ad_mu={p['SAD_AD_MU']}")
+          print(f"ad_sd={p['SAD_AD_SD']}")
+          PY
+
+      - name: Held-out nominal smooth turn
+        run: |
+          set -eux
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py \
+            --scenario turn \
+            --speed 1.3 \
+            --turn-duration 6 \
+            --straight-before 12 \
+            --straight-after 20 \
+            --normal-scale-mean "${{ steps.priors.outputs.as_mu }}" \
+            --normal-scale-sd "${{ steps.priors.outputs.as_sd }}" \
+            --normal-dynamic-mean "${{ steps.priors.outputs.ad_mu }}" \
+            --normal-dynamic-sd "${{ steps.priors.outputs.ad_sd }}"
+
       - name: Primary 100m 20s PVA attack
         run: |
           set -eux
@@ -61,8 +97,10 @@ jobs:
             --pva-east 0 \
             --pva-ramp 20 \
             --pva-observation 8 \
-            --normal-scale-sd 100 \
-            --normal-dynamic-sd 100
+            --normal-scale-mean "${{ steps.priors.outputs.as_mu }}" \
+            --normal-scale-sd "${{ steps.priors.outputs.as_sd }}" \
+            --normal-dynamic-mean "${{ steps.priors.outputs.ad_mu }}" \
+            --normal-dynamic-sd "${{ steps.priors.outputs.ad_sd }}"
 
       - name: Collect smoke outputs
         if: always()
