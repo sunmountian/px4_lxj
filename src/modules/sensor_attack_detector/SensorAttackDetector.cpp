@@ -849,8 +849,12 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 	}
 
 	AxisGlrtAccumulator::NormalPrior normal_prior{};
-	normal_prior.precision[1] = 1.f;
-	normal_prior.precision[2] = 1.f;
+	const float actuator_scale_sd = fmaxf(_param_sad_as_sd.get(), 1e-3f);
+	const float actuator_dynamic_sd = fmaxf(_param_sad_ad_sd.get(), 1e-3f);
+	normal_prior.mean[1] = _param_sad_as_mu.get();
+	normal_prior.mean[2] = _param_sad_ad_mu.get();
+	normal_prior.precision[1] = 1.f / (actuator_scale_sd * actuator_scale_sd);
+	normal_prior.precision[2] = 1.f / (actuator_dynamic_sd * actuator_dynamic_sd);
 	north_result = north_accumulator.solve(_param_sad_reg.get(), normal_prior);
 	east_result = east_accumulator.solve(_param_sad_reg.get(), normal_prior);
 
