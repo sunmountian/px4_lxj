@@ -115,6 +115,41 @@ PARAM_DEFINE_FLOAT(SAD_GPS_EPH, 5.f);
  */
 PARAM_DEFINE_FLOAT(SAD_REG, 0.1f);
 
+
+/**
+ * Nominal actuator-scale residual coefficient mean
+ *
+ * Experimental V2 parameter. Recalibrate from nominal flights before use.
+ *
+ * @group Sensor Attack Detector
+ */
+PARAM_DEFINE_FLOAT(SAD_AS_MU, 0.f);
+
+/**
+ * Nominal actuator-scale residual coefficient standard deviation
+ *
+ * @min 0.001
+ * @group Sensor Attack Detector
+ */
+PARAM_DEFINE_FLOAT(SAD_AS_SD, 1.f);
+
+/**
+ * Nominal actuator-dynamic residual coefficient mean
+ *
+ * Experimental V2 parameter. Recalibrate from nominal flights before use.
+ *
+ * @group Sensor Attack Detector
+ */
+PARAM_DEFINE_FLOAT(SAD_AD_MU, 0.f);
+
+/**
+ * Nominal actuator-dynamic residual coefficient standard deviation
+ *
+ * @min 0.001
+ * @group Sensor Attack Detector
+ */
+PARAM_DEFINE_FLOAT(SAD_AD_SD, 1.f);
+
 /**
  * Nominal mean of the eight-second GLRT
  *
