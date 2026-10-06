@@ -994,6 +994,10 @@ void SensorAttackDetector::publishStatus(uint64_t timestamp_sample, bool valid,
 		status.glrt_score_n = north_result->glrt;
 		status.glrt_score_e = east_result->glrt;
 		status.glrt_score = north_result->glrt + east_result->glrt;
+		status.cost_null_n = north_result->cost_null;
+		status.cost_null_e = east_result->cost_null;
+		status.cost_attack_n = north_result->cost_attack;
+		status.cost_attack_e = east_result->cost_attack;
 		status.normalized_score = (status.glrt_score - _param_sad_glrt_mu.get())
 					  / fmaxf(_param_sad_glrt_sd.get(), 1e-6f);
 		status.normal_bias_n = north_result->normal_parameters[0];
