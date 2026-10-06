@@ -1,0 +1,86 @@
+name: Sensor Attack Detector V2 Smoke
+
+on:
+  push:
+    branches:
+      - sad-v2-experiment
+    paths:
+      - '.github/workflows/sad_v2_smoke.yml'
+      - 'Tools/sensor_attack_detector/run_v2_smoke.py'
+      - 'src/modules/sensor_attack_detector/**'
+      - 'msg/sensor_attack_status.msg'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - name: Checkout experiment branch
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Prepare PX4 version metadata
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+
+      - name: Ensure Python experiment dependencies
+        run: |
+          set -eux
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+
+      - name: Build V2 PX4 and Gazebo plugins
+        run: |
+          set -eux
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+
+      - name: Nominal smooth turn
+        run: |
+          set -eux
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py \
+            --scenario turn \
+            --speed 1.3 \
+            --turn-duration 6 \
+            --straight-before 12 \
+            --straight-after 20 \
+            --normal-scale-sd 100 \
+            --normal-dynamic-sd 100
+
+      - name: Primary 100m 20s PVA attack
+        run: |
+          set -eux
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py \
+            --scenario pva-hover \
+            --pva-north 100 \
+            --pva-east 0 \
+            --pva-ramp 20 \
+            --pva-observation 8 \
+            --normal-scale-sd 100 \
+            --normal-dynamic-sd 100
+
+      - name: Collect smoke outputs
+        if: always()
+        run: |
+          set -eux
+          mkdir -p /tmp/sad_v2_smoke
+          if [ -d build/sad_v2_smoke ]; then
+            cp -a build/sad_v2_smoke /tmp/sad_v2_smoke/results
+          fi
+          if [ -d build/px4_sitl_default/tmp/rootfs/log ]; then
+            cp -a build/px4_sitl_default/tmp/rootfs/log /tmp/sad_v2_smoke/ulog
+          fi
+          tar -czf /tmp/sad_v2_smoke.tar.gz -C /tmp sad_v2_smoke
+
+      - name: Upload smoke outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sad-v2-smoke
+          path: /tmp/sad_v2_smoke.tar.gz
+          retention-days: 3
