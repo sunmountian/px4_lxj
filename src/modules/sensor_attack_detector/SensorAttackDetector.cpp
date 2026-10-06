@@ -1006,6 +1006,12 @@ void SensorAttackDetector::publishStatus(uint64_t timestamp_sample, bool valid,
 		status.normal_scale_e = east_result->normal_parameters[1];
 		status.normal_dynamic_n = north_result->normal_parameters[2];
 		status.normal_dynamic_e = east_result->normal_parameters[2];
+		status.normal_rms_accel_n = north_result->normal_residual_rms[AxisGlrtAccumulator::kAcceleration];
+		status.normal_rms_accel_e = east_result->normal_residual_rms[AxisGlrtAccumulator::kAcceleration];
+		status.normal_rms_velocity_n = north_result->normal_residual_rms[AxisGlrtAccumulator::kVelocity];
+		status.normal_rms_velocity_e = east_result->normal_residual_rms[AxisGlrtAccumulator::kVelocity];
+		status.normal_rms_position_n = north_result->normal_residual_rms[AxisGlrtAccumulator::kPosition];
+		status.normal_rms_position_e = east_result->normal_residual_rms[AxisGlrtAccumulator::kPosition];
 	}
 
 	const float direction_norm = sqrtf(direction_n * direction_n + direction_e * direction_e);
