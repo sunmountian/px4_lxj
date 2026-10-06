@@ -1,6 +1,17 @@
 name: Sensor Attack Detector V2 CI
 
+concurrency:
+  group: sad-v2-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
+  push:
+    branches:
+      - sad-v2-experiment
+    paths:
+      - '.github/workflows/sad_v2_ci.yml'
+      - 'src/modules/sensor_attack_detector/**'
+      - 'msg/sensor_attack_status.msg'
   pull_request:
     branches:
       - main
