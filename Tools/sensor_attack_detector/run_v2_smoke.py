@@ -63,6 +63,11 @@ def parse_args():
     parser.add_argument("--pva-east", type=float, default=0.0)
     parser.add_argument("--pva-ramp", type=float, default=20.0)
     parser.add_argument("--pva-observation", type=float, default=8.0)
+    parser.add_argument("--glrt-mean", type=float, default=0.0)
+    parser.add_argument("--glrt-sd", type=float, default=1.0)
+    parser.add_argument("--cusum-drift", type=float, default=0.5)
+    parser.add_argument("--threshold", type=float, default=1000000.0)
+    parser.add_argument("--consecutive", type=int, default=3)
     return parser.parse_args()
 
 
@@ -383,13 +388,11 @@ def apply_detector_parameters(process, args):
         "SAD_AS_SD": args.normal_scale_sd,
         "SAD_AD_MU": args.normal_dynamic_mean,
         "SAD_AD_SD": args.normal_dynamic_sd,
-        # Raw-score smoke mode only. These are deliberately not claimed as
-        # calibrated V2 sequential detector parameters.
-        "SAD_GLRT_MU": 0.0,
-        "SAD_GLRT_SD": 1.0,
-        "SAD_CUS_DR": 0.5,
-        "SAD_THRESH": 1000000.0,
-        "SAD_CONSEC": 3,
+        "SAD_GLRT_MU": args.glrt_mean,
+        "SAD_GLRT_SD": args.glrt_sd,
+        "SAD_CUS_DR": args.cusum_drift,
+        "SAD_THRESH": args.threshold,
+        "SAD_CONSEC": args.consecutive,
     }
     shell(process, "sensor_attack_detector stop", 0.2)
 
@@ -444,6 +447,18 @@ def summarize_detector(ulog_path, scenario):
             pre_attack = usable & (sample_timestamp < marker_timestamp)
             post_attack = usable & (sample_timestamp >= marker_timestamp)
             result["attack_marker_timestamp"] = marker_timestamp
+            detected = np.asarray(status["attack_detected"], dtype=bool)
+            pre_alert = usable & (sample_timestamp < marker_timestamp) & detected
+            post_alert = usable & (sample_timestamp >= marker_timestamp) & detected
+            result["pre_attack_alert_count"] = int(np.count_nonzero(pre_alert))
+            result["post_attack_alert_count"] = int(np.count_nonzero(post_alert))
+
+            if np.any(post_alert):
+                first_alert_timestamp = int(sample_timestamp[np.flatnonzero(post_alert)[0]])
+                result["first_alert_timestamp"] = first_alert_timestamp
+                result["first_alert_delay_s"] = (
+                    first_alert_timestamp - marker_timestamp
+                ) * 1e-6
 
             if np.any(pre_attack):
                 result.update(
@@ -474,6 +489,9 @@ def summarize_detector(ulog_path, scenario):
                         "post_attack_sample_count": int(np.count_nonzero(post_attack)),
                     }
                 )
+
+    detected = np.asarray(status["attack_detected"], dtype=bool)
+    result["alert_samples"] = int(np.count_nonzero(usable & detected))
 
     if np.any(usable):
         result.update(
