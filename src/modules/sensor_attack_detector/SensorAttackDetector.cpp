@@ -996,6 +996,12 @@ void SensorAttackDetector::publishStatus(uint64_t timestamp_sample, bool valid,
 		status.glrt_score = north_result->glrt + east_result->glrt;
 		status.normalized_score = (status.glrt_score - _param_sad_glrt_mu.get())
 					  / fmaxf(_param_sad_glrt_sd.get(), 1e-6f);
+		status.normal_bias_n = north_result->normal_parameters[0];
+		status.normal_bias_e = east_result->normal_parameters[0];
+		status.normal_scale_n = north_result->normal_parameters[1];
+		status.normal_scale_e = east_result->normal_parameters[1];
+		status.normal_dynamic_n = north_result->normal_parameters[2];
+		status.normal_dynamic_e = east_result->normal_parameters[2];
 	}
 
 	const float direction_norm = sqrtf(direction_n * direction_n + direction_e * direction_e);
