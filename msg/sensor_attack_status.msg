@@ -42,6 +42,12 @@ float32 normal_scale_n
 float32 normal_scale_e
 float32 normal_dynamic_n
 float32 normal_dynamic_e
+float32 normal_rms_accel_n
+float32 normal_rms_accel_e
+float32 normal_rms_velocity_n
+float32 normal_rms_velocity_e
+float32 normal_rms_position_n
+float32 normal_rms_position_e
 
 float32 accel_meas_n
 float32 accel_meas_e
