@@ -31,6 +31,14 @@ float32 direction_e
 float32 direction_norm
 float32 selected_window_s
 
+# V2 normal-model parameter estimates for calibration/diagnostics.
+float32 normal_bias_n
+float32 normal_bias_e
+float32 normal_scale_n
+float32 normal_scale_e
+float32 normal_dynamic_n
+float32 normal_dynamic_e
+
 float32 accel_meas_n
 float32 accel_meas_e
 float32 accel_actuator_n
