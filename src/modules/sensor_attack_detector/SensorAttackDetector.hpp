@@ -75,6 +75,7 @@ private:
 	static constexpr uint64_t kMaximumAttitudeGapUs{100_ms};
 	static constexpr uint64_t kMaximumActuatorAgeUs{100_ms};
 	static constexpr uint64_t kMaximumWindowGapUs{150_ms};
+	static constexpr uint64_t kDynamicLagUs{200_ms};
 	static constexpr size_t kMotorCount{4};
 
 	static constexpr size_t kPendingImuCapacity{128};
@@ -140,6 +141,7 @@ private:
 	bool integrateActuator(uint64_t start_timestamp, uint64_t end_timestamp,
 			       float (&delta_velocity)[2], float (&delta_position)[2],
 			       float &covered_time_s) const;
+	bool interpolateActuatorAcceleration(uint64_t timestamp, float (&acceleration)[2]) const;
 
 	bool evaluateWindow(uint64_t end_timestamp, AxisGlrtAccumulator::Result &north_result,
 			    AxisGlrtAccumulator::Result &east_result, uint16_t &imu_sample_count,
