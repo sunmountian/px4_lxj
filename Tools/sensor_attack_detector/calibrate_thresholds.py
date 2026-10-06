@@ -137,6 +137,16 @@ def get_dataset(ulog, name):
     return datasets[0].data
 
 
+def get_effective_parameter(ulog, name):
+    value = ulog.initial_parameters.get(name)
+
+    for _, changed_name, changed_value in ulog.changed_parameters:
+        if changed_name == name:
+            value = changed_value
+
+    return value
+
+
 def load_flight(row):
     ulog = ULog(str(row["ulog"]), None, disable_str_exceptions=True)
     data = get_dataset(ulog, "sensor_attack_status")
@@ -184,7 +194,7 @@ def load_flight(row):
         )
 
     parameters = {
-        name: ulog.initial_parameters.get(name)
+        name: get_effective_parameter(ulog, name)
         for name in FROZEN_PARAMETERS
     }
     missing_parameters = sorted(
