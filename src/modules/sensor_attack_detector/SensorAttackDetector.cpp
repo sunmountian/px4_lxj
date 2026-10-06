@@ -778,8 +778,8 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 		const float east_residual = event.acceleration_measured[1] - event.acceleration_actuator[1]
 					    - _param_sad_as_mu.get() * event.acceleration_actuator[1]
 					    - _param_sad_ad_mu.get() * east_dynamic_basis;
-		const float north_normal_basis[AxisGlrtAccumulator::kNormalDim] {1.f, 0.f, 0.f};
-		const float east_normal_basis[AxisGlrtAccumulator::kNormalDim] {1.f, 0.f, 0.f};
+		const float north_normal_basis[AxisGlrtAccumulator::kNormalDim] {1.f};
+		const float east_normal_basis[AxisGlrtAccumulator::kNormalDim] {1.f};
 		north_accumulator.addObservation(north_residual, acceleration_weight, north_normal_basis, attack_basis,
 						  AxisGlrtAccumulator::kAcceleration);
 		east_accumulator.addObservation(east_residual, acceleration_weight, east_normal_basis, attack_basis,
@@ -832,9 +832,9 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 							- elapsed_s * gps_start.velocity[axis] - delta_position[axis]
 							- _param_sad_as_mu.get() * delta_position[axis]
 							- _param_sad_ad_mu.get() * dynamic_position_basis;
-			const float velocity_normal_basis[AxisGlrtAccumulator::kNormalDim] {elapsed_s, 0.f, 0.f};
+			const float velocity_normal_basis[AxisGlrtAccumulator::kNormalDim] {elapsed_s};
 			const float position_normal_basis[AxisGlrtAccumulator::kNormalDim] {
-				0.5f * elapsed_s * elapsed_s, 0.f, 0.f
+				0.5f * elapsed_s * elapsed_s
 			};
 
 			if (axis == 0) {
@@ -854,15 +854,8 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 		}
 	}
 
-	AxisGlrtAccumulator::NormalPrior normal_prior{};
-	const float actuator_scale_sd = fmaxf(_param_sad_as_sd.get(), 1e-3f);
-	const float actuator_dynamic_sd = fmaxf(_param_sad_ad_sd.get(), 1e-3f);
-	normal_prior.mean[1] = _param_sad_as_mu.get();
-	normal_prior.mean[2] = _param_sad_ad_mu.get();
-	normal_prior.precision[1] = 1.f / (actuator_scale_sd * actuator_scale_sd);
-	normal_prior.precision[2] = 1.f / (actuator_dynamic_sd * actuator_dynamic_sd);
-	north_result = north_accumulator.solve(_param_sad_reg.get(), normal_prior);
-	east_result = east_accumulator.solve(_param_sad_reg.get(), normal_prior);
+	north_result = north_accumulator.solve(_param_sad_reg.get());
+	east_result = east_accumulator.solve(_param_sad_reg.get());
 
 	if (!north_result.valid || !east_result.valid) {
 		_data_quality_flags |= sensor_attack_status_s::DATA_QUALITY_SOLVER;
@@ -1008,10 +1001,10 @@ void SensorAttackDetector::publishStatus(uint64_t timestamp_sample, bool valid,
 					  / fmaxf(_param_sad_glrt_sd.get(), 1e-6f);
 		status.normal_bias_n = north_result->normal_parameters[0];
 		status.normal_bias_e = east_result->normal_parameters[0];
-		status.normal_scale_n = north_result->normal_parameters[1];
-		status.normal_scale_e = east_result->normal_parameters[1];
-		status.normal_dynamic_n = north_result->normal_parameters[2];
-		status.normal_dynamic_e = east_result->normal_parameters[2];
+		status.normal_scale_n = _param_sad_as_mu.get();
+		status.normal_scale_e = _param_sad_as_mu.get();
+		status.normal_dynamic_n = _param_sad_ad_mu.get();
+		status.normal_dynamic_e = _param_sad_ad_mu.get();
 		status.normal_rms_accel_n = north_result->normal_residual_rms[AxisGlrtAccumulator::kAcceleration];
 		status.normal_rms_accel_e = east_result->normal_residual_rms[AxisGlrtAccumulator::kAcceleration];
 		status.normal_rms_velocity_n = north_result->normal_residual_rms[AxisGlrtAccumulator::kVelocity];
