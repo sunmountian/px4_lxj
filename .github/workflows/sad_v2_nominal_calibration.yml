@@ -1,0 +1,124 @@
+name: Sensor Attack Detector V2 Nominal Calibration
+
+on:
+  push:
+    branches:
+      - sad-v2-experiment
+    paths:
+      - '.github/workflows/sad_v2_nominal_calibration.yml'
+
+jobs:
+  nominal-calibration:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - name: Checkout experiment branch
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Prepare PX4 version metadata
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+
+      - name: Install dependencies
+        run: python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+
+      - name: Build PX4 and Gazebo
+        run: |
+          set -eux
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+
+      - name: Collect 24 independent nominal turn flights
+        run: |
+          set -eux
+          rm -rf build/sad_v2_smoke
+          mkdir -p build/sad_v2_nominal_calibration
+
+          AS_MU=-0.33720698952674866
+          AD_MU=0.42821773886680603
+          AS_SD=0.02
+          AD_SD=0.05
+          WA=121.6889877319336
+          WV=60.0449333190918
+          WP=43.07465362548828
+
+          cat > /tmp/cases.txt <<'EOF'
+          0.7 4
+          1.0 4
+          1.3 4
+          0.7 6
+          1.0 6
+          1.3 6
+          0.7 8
+          1.0 8
+          1.3 8
+          1.3 4
+          1.0 6
+          0.7 8
+          1.3 8
+          0.7 4
+          1.0 4
+          1.3 6
+          0.7 6
+          1.0 8
+          1.3 4
+          0.7 8
+          1.0 6
+          1.3 8
+          0.7 4
+          1.0 8
+          EOF
+
+          i=0
+          while read SPEED DUR; do
+            i=$((i + 1))
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py               --scenario turn               --speed "$SPEED" --turn-duration "$DUR"               --straight-before 10 --straight-after 14               --normal-scale-mean "$AS_MU" --normal-scale-sd "$AS_SD"               --normal-dynamic-mean "$AD_MU" --normal-dynamic-sd "$AD_SD"               --weight-acceleration "$WA" --weight-velocity "$WV" --weight-position "$WP"               --glrt-mean 0 --glrt-sd 1 --threshold 1000000
+          done < /tmp/cases.txt
+          test "$i" -eq 24
+
+      - name: Build calibration manifest and calibrate
+        run: |
+          set -eux
+          OUT=build/sad_v2_nominal_calibration
+          printf 'flight_id,split,scenario,nominal,ulog\n' > "$OUT/manifest.csv"
+
+          i=0
+          for RESULT in $(find build/sad_v2_smoke -maxdepth 2 -path '*/turn_*/result.json' -type f | sort); do
+            i=$((i + 1))
+            ULOG=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ulog"])' "$RESULT")
+            if [ "$i" -le 5 ]; then SPLIT=fit; else SPLIT=calibration; fi
+            printf 'nominal_%02d,%s,turn,1,%s\n' "$i" "$SPLIT" "$ULOG" >> "$OUT/manifest.csv"
+          done
+          test "$i" -eq 24
+
+          python3 Tools/sensor_attack_detector/calibrate_thresholds.py             --manifest "$OUT/manifest.csv"             --output "$OUT/thresholds.json"             --false-alarm-rate 0.05             --drift 0.5             --consecutive 3
+
+          cp "$OUT/thresholds.json" "$OUT/summary.json"
+          cat "$OUT/thresholds.json"
+
+      - name: Archive results and ULogs
+        if: always()
+        run: |
+          set -eux
+          mkdir -p /tmp/sad_v2_nominal_calibration
+          cp -a build/sad_v2_nominal_calibration /tmp/sad_v2_nominal_calibration/report || true
+          cp -a build/sad_v2_smoke /tmp/sad_v2_nominal_calibration/results || true
+          if [ -d build/px4_sitl_default/tmp/rootfs/log ]; then
+            cp -a build/px4_sitl_default/tmp/rootfs/log /tmp/sad_v2_nominal_calibration/ulog
+          fi
+          tar -czf /tmp/sad_v2_nominal_calibration.tar.gz -C /tmp sad_v2_nominal_calibration
+
+      - name: Upload nominal calibration
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sad-v2-nominal-calibration
+          path: /tmp/sad_v2_nominal_calibration.tar.gz
+          retention-days: 3
