@@ -1,0 +1,73 @@
+name: Sensor Attack Detector V2 Fixed Model CI
+
+on:
+  push:
+    branches:
+      - sad-v2-fixed-model
+
+jobs:
+  fixed-model:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Prepare and build
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make tests
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+
+      - name: Fixed-model nominal turn
+        run: |
+          set -eux
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py             --scenario turn --speed 1.3 --turn-duration 8             --straight-before 10 --straight-after 14             --normal-scale-mean -0.33720698952674866 --normal-scale-sd 0.02             --normal-dynamic-mean 0.42821773886680603 --normal-dynamic-sd 0.05             --weight-acceleration 121.6889877319336             --weight-velocity 60.0449333190918             --weight-position 43.07465362548828             --glrt-mean 3.6631453377859935             --glrt-sd 5.924796674296906             --threshold 43.806134057729935
+
+      - name: Fixed-model 100m 20s attack
+        run: |
+          set -eux
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py             --scenario pva-hover --pva-north 100 --pva-east 0             --pva-ramp 20 --pva-observation 8             --normal-scale-mean -0.33720698952674866 --normal-scale-sd 0.02             --normal-dynamic-mean 0.42821773886680603 --normal-dynamic-sd 0.05             --weight-acceleration 121.6889877319336             --weight-velocity 60.0449333190918             --weight-position 43.07465362548828             --glrt-mean 3.6631453377859935             --glrt-sd 5.924796674296906             --threshold 43.806134057729935
+
+      - name: Summarize
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          files=sorted(Path("build/sad_v2_smoke").glob("*/result.json"))
+          rows=[]
+          for p in files:
+              r=json.load(open(p))
+              d=r["detector"]
+              rows.append({
+                  "scenario":r["scenario"],
+                  "glrt_mean":d.get("glrt_mean"),
+                  "glrt_max":d.get("glrt_max"),
+                  "alerts":d.get("alert_samples"),
+                  "pre_attack_alerts":d.get("pre_attack_alert_count"),
+                  "post_attack_alerts":d.get("post_attack_alert_count"),
+                  "delay_s":d.get("first_alert_delay_s"),
+                  "post_attack_glrt_mean":d.get("post_attack_glrt_mean"),
+                  "post_attack_glrt_max":d.get("post_attack_glrt_max"),
+              })
+          Path("build/sad_v2_fixed_summary.json").write_text(json.dumps(rows,indent=2)+"\n")
+          print(json.dumps(rows,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sad-v2-fixed-model
+          path: |
+            build/sad_v2_fixed_summary.json
+            build/sad_v2_smoke
+          retention-days: 3
