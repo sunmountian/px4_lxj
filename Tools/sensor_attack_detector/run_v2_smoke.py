@@ -415,7 +415,15 @@ def summarize_detector(ulog_path, scenario):
     valid = np.asarray(status["valid"], dtype=bool)
     quality = np.asarray(status["data_quality_flags"], dtype=np.uint32)
     glrt = np.asarray(status["glrt_score"], dtype=float)
-    usable = valid & np.isfinite(glrt)
+    cost_null = (
+        np.asarray(status["cost_null_n"], dtype=float)
+        + np.asarray(status["cost_null_e"], dtype=float)
+    )
+    cost_attack = (
+        np.asarray(status["cost_attack_n"], dtype=float)
+        + np.asarray(status["cost_attack_e"], dtype=float)
+    )
+    usable = valid & np.isfinite(glrt) & np.isfinite(cost_null) & np.isfinite(cost_attack)
     clean = usable & (quality == 0)
 
     result = {
@@ -441,6 +449,8 @@ def summarize_detector(ulog_path, scenario):
                 result.update(
                     {
                         "pre_attack_glrt_mean": float(np.mean(glrt[pre_attack])),
+                        "pre_attack_cost_null_mean": float(np.mean(cost_null[pre_attack])),
+                        "pre_attack_cost_attack_mean": float(np.mean(cost_attack[pre_attack])),
                         "pre_attack_glrt_sd": float(np.std(glrt[pre_attack], ddof=1))
                         if np.count_nonzero(pre_attack) > 1
                         else 0.0,
@@ -453,6 +463,14 @@ def summarize_detector(ulog_path, scenario):
                     {
                         "post_attack_glrt_mean": float(np.mean(glrt[post_attack])),
                         "post_attack_glrt_max": float(np.max(glrt[post_attack])),
+                        "post_attack_cost_null_mean": float(np.mean(cost_null[post_attack])),
+                        "post_attack_cost_attack_mean": float(np.mean(cost_attack[post_attack])),
+                        "post_attack_cost_reduction_fraction": float(
+                            np.mean(
+                                (cost_null[post_attack] - cost_attack[post_attack])
+                                / np.maximum(cost_null[post_attack], 1e-9)
+                            )
+                        ),
                         "post_attack_sample_count": int(np.count_nonzero(post_attack)),
                     }
                 )
