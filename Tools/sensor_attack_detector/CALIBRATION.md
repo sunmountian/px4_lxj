@@ -35,38 +35,44 @@ a synthetic Offboard-loss event. This changes only the experiment link-loss
 timeout; the threshold calibrator still rejects every nominal ULog containing
 `vehicle_status.failsafe`.
 
-## 2. Calibrate the V2 normal-model priors
+## 2. Calibrate the fixed normal-dynamics correction
 
-V2 adds two physically constrained normal-model coefficients per horizontal
-axis: actuator-scale mismatch and actuator-dynamic mismatch. Their common
-Gaussian priors must be calibrated before GLRT normalization or CUSUM
-threshold calibration.
+The final detector does not estimate actuator-scale and actuator-dynamic
+coefficients online. It first removes two calibrated nominal correction terms,
 
-Collect a dedicated nominal bootstrap set with deliberately weak priors, for
-example `SAD_AS_MU=0`, `SAD_AD_MU=0`, and
-`SAD_AS_SD=SAD_AD_SD=100`. Include maneuver excitation (especially smooth
-turn entry, sustained turning, and turn exit); pure hover alone does not
-sufficiently excite these columns. Keep `SAD_THR_GAIN`, `SAD_WA/WV/WP`,
-`SAD_REG`, and the bootstrap prior values identical across this set.
+`r* = r - alpha_bar * G_s - beta_bar * G_d`,
 
-Then estimate the priors from the online H0 parameter estimates already
-published in `sensor_attack_status`:
+and the online H0 model contains only the window bias column. This keeps the
+attack GLRT at seven unknowns per horizontal axis: one bias plus six attack
+basis coefficients.
+
+Collect a dedicated nominal bootstrap set with sufficient maneuver excitation,
+especially turn entry, sustained turning, and turn exit. Estimate the common
+horizontal correction coefficients from nominal data only. The existing
+`calibrate_normal_priors.py` tool may still be used as a bootstrap estimator;
+for the fixed model only the reported means `SAD_AS_MU` and `SAD_AD_MU`
+are used online. The reported standard deviations are diagnostics/legacy
+experiment fields and do not enter the fixed-model GLRT.
+
+Freeze `SAD_AS_MU` and `SAD_AD_MU` before collecting residual-weight,
+threshold-fit, calibration, or test flights. Bootstrap flights used to estimate
+these coefficients must not later be counted as untouched detector test flights.
+
+## 2.1 Calibrate residual-order weights
+
+With the fixed correction coefficients frozen, collect a separate nominal set
+and run the detector with equal initial residual-order weights. The online code
+already divides each residual order by its sample count. Calibrate the remaining
+inverse-variance factors from the published post-H0 residual RMS values:
 
 ```sh
-python3 Tools/sensor_attack_detector/calibrate_normal_priors.py \
-    --manifest build/sad_v2/prior_manifest.csv \
-    --output build/sad_v2/normal_prior_calibration.json
+python3 Tools/sensor_attack_detector/calibrate_residual_weights.py \
+    --manifest build/sad_v2/weight_manifest.csv \
+    --output build/sad_v2/residual_weight_calibration.json
 ```
 
-The calibrator rejects logs whose bootstrap prior standard deviations are
-narrower than 20 by default, preventing circular calibration from already
-strongly shrunk parameter estimates. It also checks that all physical-model,
-residual-weight, regularization, and bootstrap-prior parameters are identical
-across flights.
-
-After this step, freeze the resulting `SAD_AS_MU/SD` and
-`SAD_AD_MU/SD`. Do not use the bootstrap-prior flights as untouched
-threshold-test flights.
+This produces `SAD_WA`, `SAD_WV`, and `SAD_WP`. Freeze them before
+collecting any GLRT normalization, CUSUM calibration, or held-out test flight.
 
 ## 3. Calibrate normalization and the flight-level threshold
 
@@ -109,8 +115,8 @@ false-alarm target. Additional independent test flights are still required.
 
 All ULogs in one threshold calibration must use identical values for `SAD_ACT_SRC`,
 `SAD_REG`, `SAD_THR_GAIN`, `SAD_WA`, `SAD_WP`, `SAD_WV`,
-`SAD_AS_MU`, `SAD_AS_SD`, `SAD_AD_MU`, and `SAD_AD_SD`. Changing any of
-these parameters invalidates the calibrated normalization and threshold.
+`SAD_AS_MU`, and `SAD_AD_MU`. Changing any of these parameters invalidates
+the calibrated normalization and threshold.
 
 The 2026-07-30 SITL calibration and held-out PVA evaluation are summarized in
 `results/threshold_calibration_pva_20260730/README.md`.
