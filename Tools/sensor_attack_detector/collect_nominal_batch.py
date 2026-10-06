@@ -47,6 +47,14 @@ def parse_args():
     parser.add_argument("--schedule", type=Path, required=True)
     parser.add_argument("--inventory", type=Path, required=True)
     parser.add_argument("--thr-gain", type=float, required=True)
+    parser.add_argument("--weight-acceleration", type=float, default=1.0)
+    parser.add_argument("--weight-velocity", type=float, default=1.0)
+    parser.add_argument("--weight-position", type=float, default=1.0)
+    parser.add_argument("--regularization", type=float, default=0.1)
+    parser.add_argument("--normal-scale-mean", type=float, default=0.0)
+    parser.add_argument("--normal-scale-standard-deviation", type=float, default=1.0)
+    parser.add_argument("--normal-dynamic-mean", type=float, default=0.0)
+    parser.add_argument("--normal-dynamic-standard-deviation", type=float, default=1.0)
     parser.add_argument("--glrt-mean", type=float, default=0.0)
     parser.add_argument("--glrt-standard-deviation", type=float, default=1.0)
     parser.add_argument("--cusum-drift", type=float, default=0.5)
@@ -229,6 +237,14 @@ def run_flight(row, args):
             "SAD_CAL_COM_RC_IN_MODE": "4",
             "SAD_CAL_COM_OF_LOSS_T": "2.0",
             "SAD_CAL_THR_GAIN": str(args.thr_gain),
+            "SAD_CAL_WA": str(args.weight_acceleration),
+            "SAD_CAL_WV": str(args.weight_velocity),
+            "SAD_CAL_WP": str(args.weight_position),
+            "SAD_CAL_REG": str(args.regularization),
+            "SAD_CAL_AS_MU": str(args.normal_scale_mean),
+            "SAD_CAL_AS_SD": str(args.normal_scale_standard_deviation),
+            "SAD_CAL_AD_MU": str(args.normal_dynamic_mean),
+            "SAD_CAL_AD_SD": str(args.normal_dynamic_standard_deviation),
             "SAD_CAL_GLRT_MU": str(args.glrt_mean),
             "SAD_CAL_GLRT_SD": str(args.glrt_standard_deviation),
             "SAD_CAL_CUS_DR": str(args.cusum_drift),
@@ -267,6 +283,14 @@ def run_flight(row, args):
         ulog,
         {
             "SAD_THR_GAIN": args.thr_gain,
+            "SAD_WA": args.weight_acceleration,
+            "SAD_WV": args.weight_velocity,
+            "SAD_WP": args.weight_position,
+            "SAD_REG": args.regularization,
+            "SAD_AS_MU": args.normal_scale_mean,
+            "SAD_AS_SD": args.normal_scale_standard_deviation,
+            "SAD_AD_MU": args.normal_dynamic_mean,
+            "SAD_AD_SD": args.normal_dynamic_standard_deviation,
             "SAD_GLRT_MU": args.glrt_mean,
             "SAD_GLRT_SD": args.glrt_standard_deviation,
             "SAD_CUS_DR": args.cusum_drift,
