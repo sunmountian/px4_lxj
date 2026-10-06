@@ -691,8 +691,9 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 		AttackBasis::evaluate(tau, attack_basis);
 		const float north_residual = event.acceleration_measured[0] - event.acceleration_actuator[0];
 		const float east_residual = event.acceleration_measured[1] - event.acceleration_actuator[1];
-		north_accumulator.addObservation(north_residual, _param_sad_wa.get(), 1.f, attack_basis);
-		east_accumulator.addObservation(east_residual, _param_sad_wa.get(), 1.f, attack_basis);
+		const float acceleration_normal_basis[AxisGlrtAccumulator::kNormalDim] {1.f, 0.f, 0.f};
+		north_accumulator.addObservation(north_residual, _param_sad_wa.get(), acceleration_normal_basis, attack_basis);
+		east_accumulator.addObservation(east_residual, _param_sad_wa.get(), acceleration_normal_basis, attack_basis);
 
 		if (imu_sample_count < UINT16_MAX) {
 			++imu_sample_count;
@@ -734,14 +735,18 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 							- elapsed_s * gps_start.velocity[axis] - delta_position[axis];
 
 			if (axis == 0) {
-				north_accumulator.addObservation(velocity_residual, _param_sad_wv.get(), elapsed_s, velocity_basis);
+				const float velocity_normal_basis[AxisGlrtAccumulator::kNormalDim] {elapsed_s, 0.f, 0.f};
+				const float position_normal_basis[AxisGlrtAccumulator::kNormalDim] {0.5f * elapsed_s * elapsed_s, 0.f, 0.f};
+				north_accumulator.addObservation(velocity_residual, _param_sad_wv.get(), velocity_normal_basis, velocity_basis);
 				north_accumulator.addObservation(position_residual, _param_sad_wp.get(),
-								 0.5f * elapsed_s * elapsed_s, position_basis);
+								 position_normal_basis, position_basis);
 
 			} else {
-				east_accumulator.addObservation(velocity_residual, _param_sad_wv.get(), elapsed_s, velocity_basis);
+				const float velocity_normal_basis[AxisGlrtAccumulator::kNormalDim] {elapsed_s, 0.f, 0.f};
+				const float position_normal_basis[AxisGlrtAccumulator::kNormalDim] {0.5f * elapsed_s * elapsed_s, 0.f, 0.f};
+				east_accumulator.addObservation(velocity_residual, _param_sad_wv.get(), velocity_normal_basis, velocity_basis);
 				east_accumulator.addObservation(position_residual, _param_sad_wp.get(),
-								0.5f * elapsed_s * elapsed_s, position_basis);
+								position_normal_basis, position_basis);
 			}
 		}
 
@@ -755,8 +760,11 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 		return false;
 	}
 
-	north_result = north_accumulator.solve(_param_sad_reg.get());
-	east_result = east_accumulator.solve(_param_sad_reg.get());
+	AxisGlrtAccumulator::NormalPrior normal_prior{};
+	normal_prior.precision[1] = 1.f;
+	normal_prior.precision[2] = 1.f;
+	north_result = north_accumulator.solve(_param_sad_reg.get(), normal_prior);
+	east_result = east_accumulator.solve(_param_sad_reg.get(), normal_prior);
 
 	if (!north_result.valid || !east_result.valid) {
 		_data_quality_flags |= sensor_attack_status_s::DATA_QUALITY_SOLVER;
