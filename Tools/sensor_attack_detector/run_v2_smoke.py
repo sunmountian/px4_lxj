@@ -409,7 +409,7 @@ def get_dataset(ulog, name):
     return datasets[0].data
 
 
-def summarize_detector(ulog_path):
+def summarize_detector(ulog_path, scenario):
     ulog = ULog(str(ulog_path), None, disable_str_exceptions=True)
     status = get_dataset(ulog, "sensor_attack_status")
     valid = np.asarray(status["valid"], dtype=bool)
@@ -423,6 +423,39 @@ def summarize_detector(ulog_path):
         "valid_samples": int(np.count_nonzero(usable)),
         "clean_samples": int(np.count_nonzero(clean)),
     }
+
+    if scenario == "pva-hover":
+        marker_timestamp = None
+
+        for timestamp, name, value in ulog.changed_parameters:
+            if name == "SAD_THRESH" and math.isclose(float(value), 999999.0):
+                marker_timestamp = int(timestamp)
+
+        if marker_timestamp is not None:
+            sample_timestamp = np.asarray(status["timestamp_sample"], dtype=np.uint64)
+            pre_attack = usable & (sample_timestamp < marker_timestamp)
+            post_attack = usable & (sample_timestamp >= marker_timestamp)
+            result["attack_marker_timestamp"] = marker_timestamp
+
+            if np.any(pre_attack):
+                result.update(
+                    {
+                        "pre_attack_glrt_mean": float(np.mean(glrt[pre_attack])),
+                        "pre_attack_glrt_sd": float(np.std(glrt[pre_attack], ddof=1))
+                        if np.count_nonzero(pre_attack) > 1
+                        else 0.0,
+                        "pre_attack_glrt_max": float(np.max(glrt[pre_attack])),
+                    }
+                )
+
+            if np.any(post_attack):
+                result.update(
+                    {
+                        "post_attack_glrt_mean": float(np.mean(glrt[post_attack])),
+                        "post_attack_glrt_max": float(np.max(glrt[post_attack])),
+                        "post_attack_sample_count": int(np.count_nonzero(post_attack)),
+                    }
+                )
 
     if np.any(usable):
         result.update(
@@ -582,6 +615,10 @@ def main():
                 event_times.update(run_turn(master, args))
 
             else:
+                # Leave an exact in-ULog marker without changing detector
+                # behavior: both thresholds are intentionally unreachable in
+                # raw-score smoke mode.
+                shell(process, "param set SAD_THRESH 999999", 0.15)
                 trigger_file.write_text("trigger\n", encoding="utf-8")
                 event_times["attack_trigger_wall"] = time.time()
                 stream_velocity(
@@ -615,7 +652,7 @@ def main():
         "ulog": str(ulog_path),
         "parameters": parameters,
         "events": event_times,
-        "detector": summarize_detector(ulog_path),
+        "detector": summarize_detector(ulog_path, args.scenario),
     }
     metadata_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(json.dumps(result, indent=2, sort_keys=True))
