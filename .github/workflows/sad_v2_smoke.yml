@@ -12,6 +12,7 @@ on:
       - '.github/workflows/sad_v2_smoke.yml'
       - 'Tools/sensor_attack_detector/run_v2_smoke.py'
       - 'Tools/sensor_attack_detector/calibrate_normal_priors.py'
+      - 'Tools/sensor_attack_detector/calibrate_residual_weights.py'
       - 'Tools/sensor_attack_detector/tests/test_calibrate_normal_priors.py'
       - 'src/modules/sensor_attack_detector/**'
       - 'msg/sensor_attack_status.msg'
@@ -89,6 +90,50 @@ jobs:
           print(f"ad_sd={p['SAD_AD_SD']}")
           PY
 
+      - name: Nominal turns for residual-weight calibration
+        run: |
+          set -eux
+          for i in 1 2 3; do
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py \
+              --scenario turn \
+              --speed 1.3 \
+              --turn-duration 6 \
+              --straight-before 12 \
+              --straight-after 20 \
+              --normal-scale-mean "${{ steps.priors.outputs.as_mu }}" \
+              --normal-scale-sd "${{ steps.priors.outputs.as_sd }}" \
+              --normal-dynamic-mean "${{ steps.priors.outputs.ad_mu }}" \
+              --normal-dynamic-sd "${{ steps.priors.outputs.ad_sd }}"
+          done
+
+      - name: Calibrate development residual weights
+        id: weights
+        run: |
+          set -eux
+          mkdir -p build/sad_v2_smoke/calibration
+          printf 'flight_id,scenario,nominal,ulog\n' \
+            > build/sad_v2_smoke/calibration/weight_manifest.csv
+          i=0
+          for RESULT_JSON in $(find build/sad_v2_smoke -maxdepth 2 -path '*/turn_*/result.json' -type f | sort | tail -n 3); do
+            i=$((i + 1))
+            ULOG="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ulog"])' "$RESULT_JSON")"
+            printf 'weight_turn_%d,turn,1,%s\n' "$i" "$ULOG" \
+              >> build/sad_v2_smoke/calibration/weight_manifest.csv
+          done
+          test "$i" -eq 3
+          python3 Tools/sensor_attack_detector/calibrate_residual_weights.py \
+            --manifest build/sad_v2_smoke/calibration/weight_manifest.csv \
+            --minimum-flights 3 \
+            --output build/sad_v2_smoke/calibration/residual_weights.json
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          report = json.load(open("build/sad_v2_smoke/calibration/residual_weights.json"))
+          p = report["candidate_parameters"]
+          print(f"wa={p['SAD_WA']}")
+          print(f"wv={p['SAD_WV']}")
+          print(f"wp={p['SAD_WP']}")
+          PY
+
       - name: Held-out nominal smooth turn
         run: |
           set -eux
@@ -101,7 +146,10 @@ jobs:
             --normal-scale-mean "${{ steps.priors.outputs.as_mu }}" \
             --normal-scale-sd "${{ steps.priors.outputs.as_sd }}" \
             --normal-dynamic-mean "${{ steps.priors.outputs.ad_mu }}" \
-            --normal-dynamic-sd "${{ steps.priors.outputs.ad_sd }}"
+            --normal-dynamic-sd "${{ steps.priors.outputs.ad_sd }}" \
+            --weight-acceleration "${{ steps.weights.outputs.wa }}" \
+            --weight-velocity "${{ steps.weights.outputs.wv }}" \
+            --weight-position "${{ steps.weights.outputs.wp }}"
 
       - name: Primary 100m 20s PVA attack
         run: |
@@ -115,7 +163,10 @@ jobs:
             --normal-scale-mean "${{ steps.priors.outputs.as_mu }}" \
             --normal-scale-sd "${{ steps.priors.outputs.as_sd }}" \
             --normal-dynamic-mean "${{ steps.priors.outputs.ad_mu }}" \
-            --normal-dynamic-sd "${{ steps.priors.outputs.ad_sd }}"
+            --normal-dynamic-sd "${{ steps.priors.outputs.ad_sd }}" \
+            --weight-acceleration "${{ steps.weights.outputs.wa }}" \
+            --weight-velocity "${{ steps.weights.outputs.wv }}" \
+            --weight-position "${{ steps.weights.outputs.wp }}"
 
       - name: Collect smoke outputs
         if: always()
