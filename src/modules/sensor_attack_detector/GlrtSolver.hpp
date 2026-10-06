@@ -35,6 +35,13 @@ public:
 	static constexpr size_t kNormalDim{3};
 	static constexpr size_t kAttackDim{AttackBasis::kSize};
 	static constexpr size_t kJointDim{kNormalDim + kAttackDim};
+	static constexpr size_t kResidualGroupCount{3};
+
+	enum ResidualGroup : uint8_t {
+		kAcceleration = 0,
+		kVelocity = 1,
+		kPosition = 2
+	};
 
 	struct NormalPrior {
 		float mean[kNormalDim] {0.f, 0.f, 0.f};
@@ -47,6 +54,7 @@ public:
 		float cost_null{0.f};
 		float cost_attack{0.f};
 		float normal_parameters[kNormalDim] {};
+		float normal_residual_rms[kResidualGroupCount] {};
 		float attack_coefficients[kAttackDim] {};
 		float minimum_cholesky_diagonal{0.f};
 		uint16_t observation_count{0};
@@ -55,7 +63,8 @@ public:
 	void reset();
 	void addObservation(float observation, float weight,
 			    const float (&normal_basis)[kNormalDim],
-			    const float (&attack_basis)[kAttackDim]);
+			    const float (&attack_basis)[kAttackDim],
+			    ResidualGroup group = kAcceleration);
 	Result solve(float regularization, const NormalPrior &prior) const;
 	uint16_t observationCount() const { return _observation_count; }
 
@@ -125,4 +134,9 @@ private:
 	float _joint_rhs[kJointDim] {};
 	float _squared_observation{0.f};
 	uint16_t _observation_count{0};
+
+	float _group_normal_hessian[kResidualGroupCount][kNormalDim][kNormalDim] {};
+	float _group_normal_rhs[kResidualGroupCount][kNormalDim] {};
+	float _group_squared_observation[kResidualGroupCount] {};
+	uint16_t _group_observation_count[kResidualGroupCount] {};
 };
