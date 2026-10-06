@@ -35,7 +35,40 @@ a synthetic Offboard-loss event. This changes only the experiment link-loss
 timeout; the threshold calibrator still rejects every nominal ULog containing
 `vehicle_status.failsafe`.
 
-## 2. Calibrate normalization and the flight-level threshold
+## 2. Calibrate the V2 normal-model priors
+
+V2 adds two physically constrained normal-model coefficients per horizontal
+axis: actuator-scale mismatch and actuator-dynamic mismatch. Their common
+Gaussian priors must be calibrated before GLRT normalization or CUSUM
+threshold calibration.
+
+Collect a dedicated nominal bootstrap set with deliberately weak priors, for
+example `SAD_AS_MU=0`, `SAD_AD_MU=0`, and
+`SAD_AS_SD=SAD_AD_SD=100`. Include maneuver excitation (especially smooth
+turn entry, sustained turning, and turn exit); pure hover alone does not
+sufficiently excite these columns. Keep `SAD_THR_GAIN`, `SAD_WA/WV/WP`,
+`SAD_REG`, and the bootstrap prior values identical across this set.
+
+Then estimate the priors from the online H0 parameter estimates already
+published in `sensor_attack_status`:
+
+```sh
+python3 Tools/sensor_attack_detector/calibrate_normal_priors.py \
+    --manifest build/sad_v2/prior_manifest.csv \
+    --output build/sad_v2/normal_prior_calibration.json
+```
+
+The calibrator rejects logs whose bootstrap prior standard deviations are
+narrower than 20 by default, preventing circular calibration from already
+strongly shrunk parameter estimates. It also checks that all physical-model,
+residual-weight, regularization, and bootstrap-prior parameters are identical
+across flights.
+
+After this step, freeze the resulting `SAD_AS_MU/SD` and
+`SAD_AD_MU/SD`. Do not use the bootstrap-prior flights as untouched
+threshold-test flights.
+
+## 3. Calibrate normalization and the flight-level threshold
 
 The manifest is a CSV with one independent nominal flight per row:
 
@@ -74,8 +107,9 @@ At least 19 independent calibration flights are needed before the empirical
 order-statistic method can return a finite threshold for a 5% flight-level
 false-alarm target. Additional independent test flights are still required.
 
-All ULogs in one calibration must use identical values for `SAD_ACT_SRC`,
-`SAD_REG`, `SAD_THR_GAIN`, `SAD_WA`, `SAD_WP`, and `SAD_WV`. Changing any of
+All ULogs in one threshold calibration must use identical values for `SAD_ACT_SRC`,
+`SAD_REG`, `SAD_THR_GAIN`, `SAD_WA`, `SAD_WP`, `SAD_WV`,
+`SAD_AS_MU`, `SAD_AS_SD`, `SAD_AD_MU`, and `SAD_AD_SD`. Changing any of
 these parameters invalidates the calibrated normalization and threshold.
 
 The 2026-07-30 SITL calibration and held-out PVA evaluation are summarized in
