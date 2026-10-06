@@ -838,12 +838,14 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 			if (axis == 0) {
 				north_accumulator.addObservation(velocity_residual, velocity_weight, velocity_normal_basis, velocity_basis,\n\t\t\t\t\t\t  AxisGlrtAccumulator::kVelocity);
 				north_accumulator.addObservation(position_residual, position_weight,
-								 position_normal_basis, position_basis);
+								 position_normal_basis, position_basis,
+								 AxisGlrtAccumulator::kPosition);
 
 			} else {
 				east_accumulator.addObservation(velocity_residual, velocity_weight, velocity_normal_basis, velocity_basis,\n\t\t\t\t\t       AxisGlrtAccumulator::kVelocity);
 				east_accumulator.addObservation(position_residual, position_weight,
-								position_normal_basis, position_basis);
+								position_normal_basis, position_basis,
+								AxisGlrtAccumulator::kPosition);
 			}
 		}
 	}
