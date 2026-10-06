@@ -428,6 +428,7 @@ def summarize_detector(ulog_path):
         result.update(
             {
                 "glrt_mean": float(np.mean(glrt[usable])),
+                "glrt_sd": float(np.std(glrt[usable], ddof=1)),
                 "glrt_p95": float(np.percentile(glrt[usable], 95)),
                 "glrt_max": float(np.max(glrt[usable])),
                 "normal_scale_n_mean": float(
