@@ -205,7 +205,8 @@ void SensorAttackDetector::ingestActuator()
 					break;
 				}
 
-				thrust_indicator += fmaxf(motors.control[i], 0.f);
+				const float normalized = fmaxf(motors.control[i], 0.f);
+				thrust_indicator += _param_sad_thr_map.get() == 1 ? normalized * normalized : normalized;
 			}
 
 			event.thrust_indicator = thrust_indicator;
@@ -228,7 +229,8 @@ void SensorAttackDetector::ingestActuator()
 
 				const float normalized = (outputs.output[i] - PWM_DEFAULT_MIN) /
 							 (PWM_DEFAULT_MAX - PWM_DEFAULT_MIN);
-				thrust_indicator += math::constrain(normalized, 0.f, 1.f);
+				const float constrained = math::constrain(normalized, 0.f, 1.f);
+				thrust_indicator += _param_sad_thr_map.get() == 1 ? constrained * constrained : constrained;
 			}
 
 			event.thrust_indicator = thrust_indicator;
