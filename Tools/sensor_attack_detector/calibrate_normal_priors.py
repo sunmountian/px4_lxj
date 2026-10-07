@@ -25,6 +25,10 @@ except ImportError as exc:
 BOOTSTRAP_PARAMETERS = (
     "SAD_ACT_SRC",
     "SAD_THR_GAIN",
+    "SAD_THR_MAP",
+    "SAD_DRAG_K",
+    "SAD_DRAG_MOD",
+    "SAD_DYN_LAG",
     "SAD_WA",
     "SAD_WV",
     "SAD_WP",
