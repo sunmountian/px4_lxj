@@ -23,8 +23,7 @@ The estimator uses the vertical hover balance
 then takes the median across flights. Logs used for this physical calibration
 must not later be treated as untouched detector test flights.
 
-Changing `SAD_THR_GAIN`, the actuator source, residual weights, or GLRT
-regularization invalidates every previously collected raw-GLRT threshold log.
+Changing `SAD_THR_GAIN`, `SAD_THR_MAP`, `SAD_DRAG_K`, `SAD_DRAG_MOD`, `SAD_DYN_LAG`, the actuator source, residual weights, or GLRT regularization invalidates every previously collected raw-GLRT threshold log.
 
 For no-RC SITL collection, use `COM_RCL_EXCEPT=7` so Mission/Takeoff, Hold,
 and Offboard are all exempt, and set `COM_RC_IN_MODE=4` to disable stick
@@ -117,9 +116,49 @@ order-statistic method can return a finite threshold for a 5% flight-level
 false-alarm target. Additional independent test flights are still required.
 
 All ULogs in one threshold calibration must use identical values for `SAD_ACT_SRC`,
-`SAD_REG`, `SAD_THR_GAIN`, `SAD_WA`, `SAD_WP`, `SAD_WV`,
-`SAD_AS_MU`, and `SAD_AD_MU`. Changing any of these parameters invalidates
+`SAD_REG`, `SAD_THR_GAIN`, `SAD_THR_MAP`, `SAD_DRAG_K`, `SAD_DRAG_MOD`,
+`SAD_DYN_LAG`, `SAD_WA`, `SAD_WP`, `SAD_WV`, `SAD_AS_MU`, and `SAD_AD_MU`. Changing any of these parameters invalidates
 the calibrated normalization and threshold.
 
 The 2026-07-30 SITL calibration and held-out PVA evaluation are summarized in
 `results/threshold_calibration_pva_20260730/README.md`.
+
+
+## 4. Frozen thesis configuration
+
+The thesis detector configuration frozen from the 2026-10-07 PX4 SITL
+calibration uses the linear actuator map with a lightweight first-order
+horizontal damping correction. The physical-reference parameters are:
+
+- `SAD_THR_MAP = 0`
+- `SAD_THR_GAIN = 3.47118998`
+- `SAD_DRAG_K = 0.20 1/s`
+- `SAD_DRAG_MOD = 0`
+- `SAD_DYN_LAG = 0.20 s`
+- `SAD_AS_MU = -0.33720698952674866`
+- `SAD_AD_MU = 0.42821773886680603`
+
+The final mixed-normal residual calibration gives:
+
+- `SAD_WA = 311.40721173819645`
+- `SAD_WV = 226.9711056439403`
+- `SAD_WP = 159.00814015827592`
+
+The nominal GLRT/CUSUM calibration gives:
+
+- `SAD_GLRT_MU = 4.917112030075899`
+- `SAD_GLRT_SD = 6.4710112836256135`
+- `SAD_CUS_DR = 0.5`
+- `SAD_THRESH = 56.313146192854525`
+- `SAD_CONSEC = 3`
+
+The calibration protocol used 6 mixed nominal flights for residual-order
+weights, 5 nominal flights for GLRT normalization, 19 nominal flights for the
+5% flight-level empirical threshold, and 6 held-out nominal flights for the
+final false-alarm check. The held-out set contained hover, ordinary turns, and
+acceleration/deceleration maneuvers and produced 0/6 detector alerts.
+
+The final attack matrix includes four directions of the 100 m / 20 s
+smootherstep attack, 100 m / 30 s and 100 m / 40 s attacks, and an independent
+100 m / 20 s sinusoidal trajectory. These attack logs are validation data and
+are not used to tune nominal thresholds.
