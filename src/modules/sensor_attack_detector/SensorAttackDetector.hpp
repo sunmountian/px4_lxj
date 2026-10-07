@@ -141,6 +141,9 @@ private:
 	bool integrateActuator(uint64_t start_timestamp, uint64_t end_timestamp,
 			       float (&delta_velocity)[2], float (&delta_position)[2],
 			       float &covered_time_s) const;
+	bool integrateGpsVelocity(uint64_t start_timestamp, uint64_t end_timestamp,
+				  float (&velocity_integral)[2], float (&position_integral)[2],
+				  float &covered_time_s) const;
 	bool interpolateActuatorAcceleration(uint64_t timestamp, float (&acceleration)[2]) const;
 
 	bool evaluateWindow(uint64_t end_timestamp, AxisGlrtAccumulator::Result &north_result,
@@ -210,6 +213,7 @@ private:
 		(ParamFloat<px4::params::SAD_REG>) _param_sad_reg,
 		(ParamFloat<px4::params::SAD_AS_MU>) _param_sad_as_mu,
 		(ParamFloat<px4::params::SAD_AD_MU>) _param_sad_ad_mu,
+		(ParamFloat<px4::params::SAD_DRAG>) _param_sad_drag,
 		(ParamFloat<px4::params::SAD_GLRT_MU>) _param_sad_glrt_mu,
 		(ParamFloat<px4::params::SAD_GLRT_SD>) _param_sad_glrt_sd,
 		(ParamFloat<px4::params::SAD_CUS_DR>) _param_sad_cus_dr,
