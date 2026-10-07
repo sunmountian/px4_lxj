@@ -108,6 +108,41 @@ public:
 		}
 	}
 
+
+	static void evaluateTripleIntegral(float tau, float (&integral)[kSize])
+	{
+		zero(integral);
+		tau = constrain(tau);
+		const float segment_width = 1.f / static_cast<float>(kSegmentCount);
+
+		// I^3 psi(tau) = 1/2 * integral_0^tau (tau-s)^2 psi(s) ds.
+		// Each hat is linear on a segment, so the expression below is the
+		// exact polynomial integral (no numerical quadrature in flight code).
+		for (size_t segment = 0; segment < kSegmentCount; ++segment) {
+			const float start = static_cast<float>(segment) * segment_width;
+
+			if (tau <= start) {
+				break;
+			}
+
+			const float length = fminf(segment_width, tau - start);
+			const float length_sq = length * length;
+			const float length_cu = length_sq * length;
+			const float length_qu = length_cu * length;
+			const float remaining = tau - start;
+			const float base = remaining * remaining * length
+					   - remaining * length_sq
+					   + length_cu / 3.f;
+			const float weighted = 0.5f * remaining * remaining * length_sq
+					       - (2.f / 3.f) * remaining * length_cu
+					       + 0.25f * length_qu;
+
+			integral[segment] += 0.5f * (base - weighted / segment_width);
+			integral[segment + 1] += 0.5f * weighted / segment_width;
+		}
+	}
+
+
 	template<size_t N>
 	static void addSecondDifferenceRegularizer(float (&matrix)[N][N], float lambda, size_t attack_offset = 1)
 	{
