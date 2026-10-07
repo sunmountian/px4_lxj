@@ -57,6 +57,7 @@ def parse_args():
     parser.add_argument("--weight-velocity", type=float, default=1.0)
     parser.add_argument("--weight-position", type=float, default=1.0)
     parser.add_argument("--regularization", type=float, default=0.1)
+    parser.add_argument("--attack-mask", type=int, choices=range(1, 8), default=7)
     parser.add_argument("--normal-scale-mean", type=float, default=0.0)
     parser.add_argument("--normal-scale-sd", type=float, default=100.0)
     parser.add_argument("--normal-dynamic-mean", type=float, default=0.0)
@@ -388,6 +389,7 @@ def apply_detector_parameters(process, args):
         "SAD_WV": args.weight_velocity,
         "SAD_WP": args.weight_position,
         "SAD_REG": args.regularization,
+        "SAD_ATK_MASK": args.attack_mask,
         "SAD_AS_MU": args.normal_scale_mean,
         "SAD_AS_SD": args.normal_scale_sd,
         "SAD_AD_MU": args.normal_dynamic_mean,
