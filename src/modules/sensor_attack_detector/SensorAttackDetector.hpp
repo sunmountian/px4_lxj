@@ -209,6 +209,7 @@ private:
 		(ParamFloat<px4::params::SAD_THR_GAIN>) _param_sad_thr_gain,
 		(ParamFloat<px4::params::SAD_GPS_EPH>) _param_sad_gps_eph,
 		(ParamFloat<px4::params::SAD_REG>) _param_sad_reg,
+		(ParamInt<px4::params::SAD_ATK_MASK>) _param_sad_atk_mask,
 		(ParamFloat<px4::params::SAD_AS_MU>) _param_sad_as_mu,
 		(ParamFloat<px4::params::SAD_AD_MU>) _param_sad_ad_mu,
 		(ParamFloat<px4::params::SAD_GLRT_MU>) _param_sad_glrt_mu,
