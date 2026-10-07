@@ -301,7 +301,6 @@ def main():
             "maximum_vertical_speed_m_s": args.maximum_vertical_speed,
             "maximum_tilt_degrees": args.maximum_tilt_degrees,
             "minimum_samples_per_flight": args.minimum_samples_per_flight,
-            "mapping": args.mapping,
             "pwm_min": args.pwm_min,
             "pwm_max": args.pwm_max,
         },
@@ -313,8 +312,7 @@ def main():
 
     with args.output.open("w", encoding="utf-8") as stream:
         json.dump(report, stream, indent=2, sort_keys=True)
-        stream.write("
-")
+        stream.write("\n")
 
     write_flight_csv(flight_csv, flights)
     print(json.dumps(report["candidate_parameter"], indent=2, sort_keys=True))
