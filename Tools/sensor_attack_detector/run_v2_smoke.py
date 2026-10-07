@@ -494,6 +494,21 @@ def summarize_detector(ulog_path, scenario):
     detected = np.asarray(status["attack_detected"], dtype=bool)
     result["alert_samples"] = int(np.count_nonzero(usable & detected))
 
+    if "cusum_score" in status and np.any(usable):
+        cusum = np.asarray(status["cusum_score"], dtype=float)
+        threshold_values = np.asarray(status["threshold"], dtype=float)
+        finite_cusum = usable & np.isfinite(cusum)
+        finite_threshold = usable & np.isfinite(threshold_values)
+
+        if np.any(finite_cusum):
+            result["cusum_max"] = float(np.max(cusum[finite_cusum]))
+
+        if np.any(finite_threshold):
+            result["threshold_value"] = float(np.median(threshold_values[finite_threshold]))
+
+            if "cusum_max" in result:
+                result["cusum_margin"] = result["threshold_value"] - result["cusum_max"]
+
     if np.any(usable):
         result.update(
             {
