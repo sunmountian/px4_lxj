@@ -1,0 +1,88 @@
+name: Sensor Attack Detector Alternative Attack Profiles
+
+on:
+  push:
+    branches:
+      - sad-v2-fixed-model
+    paths:
+      - '.github/workflows/sad_v2_alt_attack.yml'
+      - 'src/modules/simulator/simulator_mavlink.cpp'
+
+concurrency:
+  group: sad-v2-alt-attack
+  cancel-in-progress: true
+
+jobs:
+  alternative-profile:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Prepare environment
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+
+      - name: Run profile comparison
+        run: |
+          set -eux
+          OUT=build/sad_v2_alt_attack
+          rm -rf build/sad_v2_smoke "$OUT"
+          mkdir -p "$OUT"
+
+          COMMON="--normal-scale-mean -0.33720698952674866             --normal-scale-sd 0.02             --normal-dynamic-mean 0.42821773886680603             --normal-dynamic-sd 0.05             --weight-acceleration 142.17990926253765             --weight-velocity 71.20519081577794             --weight-position 50.66817247677383             --glrt-mean 4.309805243626817             --glrt-sd 6.958476444883066             --threshold 43.18242814116727"
+
+          run_case () {
+            LABEL="$1"; PROFILE="$2"; RAMP="$3"; N="$4"; E="$5"
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py               --scenario pva-hover --pva-profile "$PROFILE"               --pva-north "$N" --pva-east "$E"               --pva-ramp "$RAMP" --pva-observation 14 $COMMON
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -path '*/pva-hover_*/result.json' -type f | sort | tail -n 1)
+            cp "$RESULT" "$OUT/${LABEL}.json"
+          }
+
+          run_case smoother_n_100_20 smootherstep 20 100 0
+          run_case sinusoidal_n_100_20 sinusoidal 20 100 0
+          run_case smoother_n_100_30 smootherstep 30 100 0
+          run_case sinusoidal_n_100_30 sinusoidal 30 100 0
+          run_case sinusoidal_e_100_20 sinusoidal 20 0 100
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path("build/sad_v2_alt_attack")
+          rows=[]
+          for p in sorted(root.glob("*.json")):
+              if p.name=="summary.json":
+                  continue
+              r=json.load(open(p)); d=r["detector"]
+              rows.append({
+                  "case":p.stem,
+                  "profile":r["attack_spec"].get("profile"),
+                  "ramp_s":r["attack_spec"]["ramp_s"],
+                  "pre_attack_alerts":d.get("pre_attack_alert_count"),
+                  "post_attack_alerts":d.get("post_attack_alert_count"),
+                  "delay_s":d.get("first_alert_delay_s"),
+                  "post_attack_glrt_mean":d.get("post_attack_glrt_mean"),
+                  "post_attack_glrt_max":d.get("post_attack_glrt_max"),
+                  "cusum_max":d.get("cusum_max"),
+              })
+          (root/"summary.json").write_text(json.dumps(rows,indent=2,sort_keys=True)+"\n")
+          print(json.dumps(rows,indent=2,sort_keys=True))
+          PY
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sad-v2-alternative-attack
+          path: build/sad_v2_alt_attack
+          retention-days: 5
