@@ -36,7 +36,7 @@ def parse_args():
     )
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--pwm-min", type=float, default=1000.0)
+    parser.add_argument("--mapping", choices=("linear", "square"), default="linear")\n    parser.add_argument("--pwm-min", type=float, default=1000.0)
     parser.add_argument("--pwm-max", type=float, default=2000.0)
     parser.add_argument("--maximum-horizontal-speed", type=float, default=0.15)
     parser.add_argument("--maximum-vertical-speed", type=float, default=0.10)
@@ -121,6 +121,7 @@ def interpolated(source_timestamp, source_values, target_timestamp):
 
 def estimate_flight_gain(
     row,
+    mapping,
     pwm_min,
     pwm_max,
     maximum_horizontal_speed,
@@ -145,7 +146,8 @@ def estimate_flight_gain(
     normalized = np.clip(
         (motor_outputs - pwm_min) / (pwm_max - pwm_min), 0.0, 1.0
     )
-    thrust_indicator = np.sum(normalized, axis=1)
+    mapped = normalized * normalized if mapping == "square" else normalized
+    thrust_indicator = np.sum(mapped, axis=1)
 
     vx = interpolated(
         position_timestamp,
@@ -239,6 +241,7 @@ def calibrate(rows, args):
     flights = [
         estimate_flight_gain(
             row,
+            args.mapping,
             args.pwm_min,
             args.pwm_max,
             args.maximum_horizontal_speed,
@@ -297,7 +300,7 @@ def main():
             "maximum_vertical_speed_m_s": args.maximum_vertical_speed,
             "maximum_tilt_degrees": args.maximum_tilt_degrees,
             "minimum_samples_per_flight": args.minimum_samples_per_flight,
-            "pwm_min": args.pwm_min,
+            "mapping": args.mapping,\n            "pwm_min": args.pwm_min,
             "pwm_max": args.pwm_max,
         },
         "flights": [
