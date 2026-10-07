@@ -108,6 +108,19 @@ PARAM_DEFINE_INT32(SAD_THR_MAP, 0);
 PARAM_DEFINE_FLOAT(SAD_THR_GAIN, 3.47118998f);
 
 /**
+ * Fixed horizontal linear-damping coefficient
+ *
+ * Experimental physical-reference extension. Zero preserves the legacy
+ * undamped actuator propagation exactly.
+ *
+ * @unit 1/s
+ * @min 0
+ * @max 2
+ * @group Sensor Attack Detector
+ */
+PARAM_DEFINE_FLOAT(SAD_DRAG_K, 0.f);
+
+/**
  * Maximum accepted GPS horizontal position error
  *
  * @unit m
