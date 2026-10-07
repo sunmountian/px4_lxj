@@ -42,7 +42,7 @@ VELOCITY_TYPE_MASK = (
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--scenario", choices=("turn", "maneuver", "pva-hover"), required=True)
+    parser.add_argument("--scenario", choices=("hover", "turn", "maneuver", "pva-hover"), required=True)
     parser.add_argument("--maneuver", choices=("accel", "slalom", "hard-turn"), default="slalom")
     parser.add_argument("--speed", type=float, default=1.3)
     parser.add_argument("--turn-duration", type=float, default=6.0)
@@ -557,6 +557,28 @@ def summarize_detector(ulog_path, scenario):
     return result
 
 
+def run_hover(master, args):
+    rate = args.setpoint_rate
+    send_velocity_setpoint(master, 0.0, 0.0)
+    for _ in range(int(rate)):
+        send_velocity_setpoint(master, 0.0, 0.0)
+        time.sleep(1.0 / rate)
+    set_px4_mode(
+        master,
+        "OFFBOARD",
+        keepalive=lambda: send_velocity_setpoint(master, 0.0, 0.0, 0.0),
+    )
+    start_wall = time.time()
+    stream_velocity(master, lambda _: (0.0, 0.0), 20.0, rate)
+    end_wall = time.time()
+    set_px4_mode(
+        master,
+        "LAND",
+        keepalive=lambda: send_velocity_setpoint(master, 0.0, 0.0, 0.0),
+    )
+    return {"hover_start_wall": start_wall, "hover_end_wall": end_wall}
+
+
 def run_turn(master, args):
     speed = args.speed
     rate = args.setpoint_rate
@@ -745,7 +767,10 @@ def main():
                 keepalive=lambda: send_velocity_setpoint(master, 0.0, 0.0, 0.0),
             )
 
-            if args.scenario == "turn":
+            if args.scenario == "hover":
+                event_times.update(run_hover(master, args))
+
+            elif args.scenario == "turn":
                 event_times.update(run_turn(master, args))
 
             elif args.scenario == "maneuver":
@@ -796,7 +821,9 @@ def main():
         "detector": summarize_detector(ulog_path, args.scenario),
     }
 
-    if args.scenario == "pva-hover":
+    if args.scenario == "hover":
+        result["hover_spec"] = {"duration_s": 20.0}
+    elif args.scenario == "pva-hover":
         result["attack_spec"] = {
             "north_m": args.pva_north,
             "east_m": args.pva_east,
