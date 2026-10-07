@@ -146,6 +146,9 @@ private:
 	bool evaluateWindow(uint64_t end_timestamp, AxisGlrtAccumulator::Result &north_result,
 			    AxisGlrtAccumulator::Result &east_result, uint16_t &imu_sample_count,
 			    uint16_t &gps_sample_count, float &direction_n, float &direction_e);
+	bool evaluateWindowDamped(uint64_t end_timestamp, AxisGlrtAccumulator::Result &north_result,
+				  AxisGlrtAccumulator::Result &east_result, uint16_t &imu_sample_count,
+				  uint16_t &gps_sample_count, float &direction_n, float &direction_e);
 	void runPendingEvaluation(hrt_abstime run_start);
 	void updateSequentialDetector(float normalized_score);
 	void resetSequentialDetector();
@@ -207,6 +210,7 @@ private:
 		(ParamInt<px4::params::SAD_ACT_SRC>) _param_sad_act_src,
 		(ParamInt<px4::params::SAD_THR_MAP>) _param_sad_thr_map,
 		(ParamFloat<px4::params::SAD_THR_GAIN>) _param_sad_thr_gain,
+		(ParamFloat<px4::params::SAD_DRAG_K>) _param_sad_drag_k,
 		(ParamFloat<px4::params::SAD_GPS_EPH>) _param_sad_gps_eph,
 		(ParamFloat<px4::params::SAD_REG>) _param_sad_reg,
 		(ParamInt<px4::params::SAD_ATK_MASK>) _param_sad_atk_mask,
