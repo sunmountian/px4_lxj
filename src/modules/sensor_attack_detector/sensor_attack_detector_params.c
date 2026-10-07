@@ -159,6 +159,20 @@ PARAM_DEFINE_FLOAT(SAD_AD_MU, 0.f);
 PARAM_DEFINE_FLOAT(SAD_AD_SD, 1.f);
 
 /**
+ * Horizontal velocity drag rate
+ *
+ * Low-order nominal aerodynamic correction a_drag = -SAD_DRAG * v_h.
+ * The detector transforms the attack basis consistently so this correction
+ * does not silently absorb coordinated velocity attacks.
+ *
+ * @unit 1/s
+ * @min 0
+ * @max 5
+ * @group Sensor Attack Detector
+ */
+PARAM_DEFINE_FLOAT(SAD_DRAG, 0.f);
+
+/**
  * Nominal mean of the eight-second GLRT
  *
  * This value must be calibrated from independent nominal flights.
