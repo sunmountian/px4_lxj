@@ -696,7 +696,7 @@ bool SensorAttackDetector::evaluateWindowDamped(uint64_t end_timestamp,
 
 	const uint64_t start_timestamp = end_timestamp - kWindowDurationUs;
 
-	if (start_timestamp <= kDynamicLagUs) {
+	if (start_timestamp <= static_cast<uint64_t>(math::constrain(_param_sad_dyn_lag.get(), 0.02f, 0.5f) * 1e6f)) {
 		_data_quality_flags |= sensor_attack_status_s::DATA_QUALITY_WINDOW_COVERAGE;
 		return false;
 	}
@@ -740,13 +740,13 @@ bool SensorAttackDetector::evaluateWindowDamped(uint64_t end_timestamp,
 
 	auto corrected_input = [&](const ImuEvent &event, uint64_t center_timestamp,
 				   float (&input)[2]) -> bool {
-		if (center_timestamp <= kDynamicLagUs) {
+		if (center_timestamp <= static_cast<uint64_t>(math::constrain(_param_sad_dyn_lag.get(), 0.02f, 0.5f) * 1e6f)) {
 			return false;
 		}
 
 		float delayed[2] {};
 
-		if (!interpolateActuatorAcceleration(center_timestamp - kDynamicLagUs, delayed)) {
+		if (!interpolateActuatorAcceleration(center_timestamp - static_cast<uint64_t>(math::constrain(_param_sad_dyn_lag.get(), 0.02f, 0.5f) * 1e6f), delayed)) {
 			return false;
 		}
 
@@ -1028,7 +1028,7 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 
 	const uint64_t start_timestamp = end_timestamp - kWindowDurationUs;
 
-	if (start_timestamp <= kDynamicLagUs) {
+	if (start_timestamp <= static_cast<uint64_t>(math::constrain(_param_sad_dyn_lag.get(), 0.02f, 0.5f) * 1e6f)) {
 		_data_quality_flags |= sensor_attack_status_s::DATA_QUALITY_WINDOW_COVERAGE;
 		return false;
 	}
@@ -1108,7 +1108,7 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 
 		float delayed_acceleration[2] {};
 
-		if (!interpolateActuatorAcceleration(center_timestamp - kDynamicLagUs, delayed_acceleration)) {
+		if (!interpolateActuatorAcceleration(center_timestamp - static_cast<uint64_t>(math::constrain(_param_sad_dyn_lag.get(), 0.02f, 0.5f) * 1e6f), delayed_acceleration)) {
 			_data_quality_flags |= sensor_attack_status_s::DATA_QUALITY_WINDOW_COVERAGE;
 			return false;
 		}
@@ -1146,7 +1146,7 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 		float delayed_delta_velocity[2] {};
 		float delayed_delta_position[2] {};
 		float delayed_covered_time_s = 0.f;
-		integrateActuator(start_timestamp - kDynamicLagUs, event.timestamp - kDynamicLagUs,
+		integrateActuator(start_timestamp - static_cast<uint64_t>(math::constrain(_param_sad_dyn_lag.get(), 0.02f, 0.5f) * 1e6f), event.timestamp - static_cast<uint64_t>(math::constrain(_param_sad_dyn_lag.get(), 0.02f, 0.5f) * 1e6f),
 				  delayed_delta_velocity, delayed_delta_position, delayed_covered_time_s);
 
 		if ((covered_time_s + static_cast<float>(kMaximumWindowGapUs) * 1e-6f < elapsed_s)
