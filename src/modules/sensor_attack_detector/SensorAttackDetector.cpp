@@ -129,6 +129,7 @@ void SensorAttackDetector::Run()
 	ingestAttitude();
 	ingestActuator();
 	ingestGps();
+	ingestReference();
 	ingestImu();
 	processPendingImu();
 	runPendingEvaluation(run_start);
@@ -210,6 +211,7 @@ void SensorAttackDetector::ingestActuator()
 			updated = true;
 			event.timestamp = motors.timestamp_sample != 0 ? motors.timestamp_sample : motors.timestamp;
 			float thrust_indicator = 0.f;
+			float drag_indicator = 0.f;
 			valid = event.timestamp != 0;
 
 			for (size_t i = 0; i < kMotorCount; ++i) {
@@ -218,10 +220,13 @@ void SensorAttackDetector::ingestActuator()
 					break;
 				}
 
-				thrust_indicator += mapped_motor_command(fmaxf(motors.control[i], 0.f));
+				const float normalized = math::constrain(fmaxf(motors.control[i], 0.f), 0.f, 1.f);
+				thrust_indicator += mapped_motor_command(normalized);
+				drag_indicator += normalized;
 			}
 
 			event.thrust_indicator = thrust_indicator;
+			event.drag_indicator = drag_indicator;
 		}
 
 	} else {
@@ -231,6 +236,7 @@ void SensorAttackDetector::ingestActuator()
 			updated = true;
 			event.timestamp = outputs.timestamp;
 			float thrust_indicator = 0.f;
+			float drag_indicator = 0.f;
 			valid = (event.timestamp != 0) && (outputs.noutputs >= kMotorCount);
 
 			for (size_t i = 0; valid && (i < kMotorCount); ++i) {
@@ -239,12 +245,14 @@ void SensorAttackDetector::ingestActuator()
 					break;
 				}
 
-				const float normalized = (outputs.output[i] - PWM_DEFAULT_MIN) /
-							 (PWM_DEFAULT_MAX - PWM_DEFAULT_MIN);
+				const float normalized = math::constrain((outputs.output[i] - PWM_DEFAULT_MIN) /
+							 (PWM_DEFAULT_MAX - PWM_DEFAULT_MIN), 0.f, 1.f);
 				thrust_indicator += mapped_motor_command(normalized);
+				drag_indicator += normalized;
 			}
 
 			event.thrust_indicator = thrust_indicator;
+			event.drag_indicator = drag_indicator;
 		}
 	}
 
@@ -341,6 +349,31 @@ void SensorAttackDetector::ingestGps()
 	}
 }
 
+void SensorAttackDetector::ingestReference()
+{
+	vehicle_local_position_setpoint_s setpoint{};
+
+	if (!_trajectory_setpoint_sub.update(&setpoint)) {
+		return;
+	}
+
+	const uint64_t timestamp = setpoint.timestamp;
+
+	if ((timestamp == 0) || (timestamp <= _last_reference_timestamp)) {
+		return;
+	}
+
+	ReferenceEvent event{};
+	event.timestamp = timestamp;
+	event.velocity_valid = PX4_ISFINITE(setpoint.vx) && PX4_ISFINITE(setpoint.vy);
+	event.velocity[0] = event.velocity_valid ? setpoint.vx : 0.f;
+	event.velocity[1] = event.velocity_valid ? setpoint.vy : 0.f;
+	event.velocity[2] = (event.velocity_valid && PX4_ISFINITE(setpoint.vz)) ? setpoint.vz : 0.f;
+
+	_reference_buffer.push(event);
+	_last_reference_timestamp = timestamp;
+}
+
 void SensorAttackDetector::ingestImu()
 {
 	vehicle_imu_s imu{};
@@ -395,11 +428,14 @@ void SensorAttackDetector::processPendingImu()
 		const PendingImuEvent &imu = _pending_imu_buffer.front();
 		Quatf q_nb{};
 		float thrust_indicator = 0.f;
+		float drag_indicator = 0.f;
+		float reference_velocity[3] {};
 		const bool attitude_available = interpolateAttitude(imu.timestamp, q_nb);
-		const bool actuator_available = findActuator(imu.timestamp, thrust_indicator);
+		const bool actuator_available = findActuator(imu.timestamp, thrust_indicator, drag_indicator);
+		findReferenceVelocity(imu.timestamp, reference_velocity);
 
 		if (attitude_available && actuator_available) {
-			aggregateAlignedImu(imu, q_nb, thrust_indicator);
+			aggregateAlignedImu(imu, q_nb, thrust_indicator, drag_indicator, reference_velocity);
 			_pending_imu_buffer.pop_front();
 			continue;
 		}
@@ -478,7 +514,7 @@ bool SensorAttackDetector::interpolateAttitude(uint64_t timestamp, Quatf &q_nb) 
 	return false;
 }
 
-bool SensorAttackDetector::findActuator(uint64_t timestamp, float &thrust_indicator) const
+bool SensorAttackDetector::findActuator(uint64_t timestamp, float &thrust_indicator, float &drag_indicator) const
 {
 	for (size_t i = _actuator_buffer.size(); i > 0; --i) {
 		const ActuatorEvent &event = _actuator_buffer[i - 1];
@@ -491,7 +527,33 @@ bool SensorAttackDetector::findActuator(uint64_t timestamp, float &thrust_indica
 			}
 
 			thrust_indicator = event.thrust_indicator;
-			return PX4_ISFINITE(thrust_indicator);
+			drag_indicator = event.drag_indicator;
+			return PX4_ISFINITE(thrust_indicator) && PX4_ISFINITE(drag_indicator);
+		}
+	}
+
+	return false;
+}
+
+bool SensorAttackDetector::findReferenceVelocity(uint64_t timestamp, float (&velocity)[3]) const
+{
+	velocity[0] = 0.f;
+	velocity[1] = 0.f;
+	velocity[2] = 0.f;
+
+	for (size_t i = _reference_buffer.size(); i > 0; --i) {
+		const ReferenceEvent &event = _reference_buffer[i - 1];
+
+		if (event.timestamp <= timestamp) {
+			if ((timestamp - event.timestamp) > kMaximumReferenceAgeUs || !event.velocity_valid) {
+				return false;
+			}
+
+			for (size_t axis = 0; axis < 3; ++axis) {
+				velocity[axis] = event.velocity[axis];
+			}
+
+			return true;
 		}
 	}
 
@@ -499,13 +561,20 @@ bool SensorAttackDetector::findActuator(uint64_t timestamp, float &thrust_indica
 }
 
 void SensorAttackDetector::aggregateAlignedImu(const PendingImuEvent &imu, const Quatf &q_nb,
-		float thrust_indicator)
+		float thrust_indicator, float drag_indicator, const float (&reference_velocity)[3])
 {
 	const Dcmf rotation_nb{q_nb};
 	const Vector3f delta_velocity_body{imu.delta_velocity};
 	const Vector3f delta_velocity_ned = rotation_nb * delta_velocity_body;
 	const Vector3f actuator_acceleration_body{0.f, 0.f, -_param_sad_thr_gain.get() *thrust_indicator};
-	const Vector3f actuator_acceleration_ned = rotation_nb * actuator_acceleration_body;
+	Vector3f actuator_acceleration_ned = rotation_nb * actuator_acceleration_body;
+
+	const Vector3f rotor_axis_ned = rotation_nb * Vector3f{0.f, 0.f, 1.f};
+	const Vector3f reference_velocity_ned{reference_velocity};
+	const float axial_velocity = reference_velocity_ned.dot(rotor_axis_ned);
+	const Vector3f perpendicular_velocity = reference_velocity_ned - rotor_axis_ned * axial_velocity;
+	actuator_acceleration_ned -= _param_sad_drag_gain.get() * drag_indicator * perpendicular_velocity;
+
 	const uint64_t bin_index = imu.timestamp / kImuBinDurationUs;
 
 	if (_imu_bin.active && (bin_index != _imu_bin.index)) {
@@ -567,6 +636,11 @@ void SensorAttackDetector::trimLongBuffers()
 	while ((_gps_buffer.size() > 1)
 	       && ((_gps_buffer.back().timestamp - _gps_buffer.front().timestamp) > kBufferRetentionUs)) {
 		_gps_buffer.pop_front();
+	}
+
+	while ((_reference_buffer.size() > 1)
+	       && ((_reference_buffer.back().timestamp - _reference_buffer.front().timestamp) > kBufferRetentionUs)) {
+		_reference_buffer.pop_front();
 	}
 }
 
