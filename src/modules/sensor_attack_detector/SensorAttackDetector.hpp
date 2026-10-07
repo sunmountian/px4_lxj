@@ -75,8 +75,7 @@ private:
 	static constexpr uint64_t kMaximumAttitudeGapUs{100_ms};
 	static constexpr uint64_t kMaximumActuatorAgeUs{100_ms};
 	static constexpr uint64_t kMaximumWindowGapUs{150_ms};
-	static constexpr uint64_t kDynamicLagUs{200_ms};
-	static constexpr size_t kMotorCount{4};
+		static constexpr size_t kMotorCount{4};
 
 	static constexpr size_t kPendingImuCapacity{128};
 	static constexpr size_t kAttitudeCapacity{128};
@@ -216,6 +215,7 @@ private:
 		(ParamInt<px4::params::SAD_ATK_MASK>) _param_sad_atk_mask,
 		(ParamFloat<px4::params::SAD_AS_MU>) _param_sad_as_mu,
 		(ParamFloat<px4::params::SAD_AD_MU>) _param_sad_ad_mu,
+		(ParamFloat<px4::params::SAD_DYN_LAG>) _param_sad_dyn_lag,
 		(ParamFloat<px4::params::SAD_GLRT_MU>) _param_sad_glrt_mu,
 		(ParamFloat<px4::params::SAD_GLRT_SD>) _param_sad_glrt_sd,
 		(ParamFloat<px4::params::SAD_CUS_DR>) _param_sad_cus_dr,
