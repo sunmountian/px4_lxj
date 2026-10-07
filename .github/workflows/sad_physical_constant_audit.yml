@@ -1,0 +1,57 @@
+name: Sensor Attack Detector Physical Constant Audit
+
+on:
+  push:
+    branches:
+      - sad-v2-fixed-model
+    paths:
+      - '.github/workflows/sad_physical_constant_audit.yml'
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+      - name: Audit Iris motor and drag constants
+        run: |
+          set -eux
+          python3 - <<'PY'
+          import json, math, re
+          from pathlib import Path
+
+          files=list(Path("Tools/sitl_gazebo").rglob("iris.sdf")) + list(Path("Tools/sitl_gazebo").rglob("iris.sdf.jinja"))
+          if not files:
+              raise SystemExit("Iris SDF not found")
+          text="\n".join(p.read_text(errors="replace") for p in files)
+          def vals(tag):
+              return [float(x) for x in re.findall(rf"<{tag}>\s*([0-9.eE+-]+)\s*</{tag}>", text)]
+          motor=vals("motorConstant")
+          drag=vals("rotorDragCoefficient")
+          mass_match=re.search(r"<link\s+name=['\"]base_link['\"][\s\S]*?<mass>\s*([0-9.eE+-]+)\s*</mass>", text)
+          if not motor or not drag or not mass_match:
+              raise SystemExit("required constants not found")
+          km=float(motor[0]); kd=float(drag[0]); mass=float(mass_match.group(1))
+          g=9.80665
+          omega=math.sqrt((mass*g/4.0)/km)
+          c=4.0*kd*omega/mass
+          report={
+            "files":[str(p) for p in files],
+            "mass_kg":mass,
+            "motor_constant":km,
+            "rotor_drag_coefficient":kd,
+            "hover_omega_rad_s":omega,
+            "predicted_horizontal_damping_s_inv":c,
+            "motor_constants_unique":sorted(set(motor)),
+            "drag_constants_unique":sorted(set(drag)),
+          }
+          Path("physical_constant_audit.json").write_text(json.dumps(report,indent=2)+"\n")
+          print(json.dumps(report,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sad-physical-constant-audit
+          path: physical_constant_audit.json
+          retention-days: 5
