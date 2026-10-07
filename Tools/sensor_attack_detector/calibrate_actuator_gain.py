@@ -36,7 +36,8 @@ def parse_args():
     )
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--mapping", choices=("linear", "square"), default="linear")\n    parser.add_argument("--pwm-min", type=float, default=1000.0)
+    parser.add_argument("--mapping", choices=("linear", "square"), default="linear")
+    parser.add_argument("--pwm-min", type=float, default=1000.0)
     parser.add_argument("--pwm-max", type=float, default=2000.0)
     parser.add_argument("--maximum-horizontal-speed", type=float, default=0.15)
     parser.add_argument("--maximum-vertical-speed", type=float, default=0.10)
@@ -300,7 +301,8 @@ def main():
             "maximum_vertical_speed_m_s": args.maximum_vertical_speed,
             "maximum_tilt_degrees": args.maximum_tilt_degrees,
             "minimum_samples_per_flight": args.minimum_samples_per_flight,
-            "mapping": args.mapping,\n            "pwm_min": args.pwm_min,
+            "mapping": args.mapping,
+            "pwm_min": args.pwm_min,
             "pwm_max": args.pwm_max,
         },
         "flights": [
@@ -311,7 +313,8 @@ def main():
 
     with args.output.open("w", encoding="utf-8") as stream:
         json.dump(report, stream, indent=2, sort_keys=True)
-        stream.write("\n")
+        stream.write("
+")
 
     write_flight_csv(flight_csv, flights)
     print(json.dumps(report["candidate_parameter"], indent=2, sort_keys=True))
