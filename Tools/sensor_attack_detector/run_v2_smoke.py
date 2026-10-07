@@ -111,8 +111,7 @@ def terminate_process(process):
 
 
 def shell(process, command, settle_s=0.08):
-    process.stdin.write(command + "
-")
+    process.stdin.write(command + "\n")
     process.stdin.flush()
     time.sleep(settle_s)
 
@@ -563,9 +562,11 @@ def summarize_detector(ulog_path, scenario):
 def run_hover(master, args):
     rate = args.setpoint_rate
     send_velocity_setpoint(master, 0.0, 0.0)
+
     for _ in range(int(rate)):
         send_velocity_setpoint(master, 0.0, 0.0)
         time.sleep(1.0 / rate)
+
     set_px4_mode(
         master,
         "OFFBOARD",
@@ -788,8 +789,7 @@ def main():
                     f"param set SAD_THRESH {args.threshold + marker_delta}",
                     0.15,
                 )
-                trigger_file.write_text("trigger
-", encoding="utf-8")
+                trigger_file.write_text("trigger\n", encoding="utf-8")
                 event_times["attack_trigger_wall"] = time.time()
                 stream_velocity(
                     master,
@@ -847,8 +847,7 @@ def main():
             "maneuver": args.maneuver,
             "speed_m_s": args.speed,
         }
-    metadata_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "
-")
+    metadata_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(json.dumps(result, indent=2, sort_keys=True))
     print(f"result={metadata_path}")
     print(f"ulog={ulog_path}")
