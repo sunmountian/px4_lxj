@@ -424,7 +424,7 @@ def get_dataset(ulog, name):
     return datasets[0].data
 
 
-def summarize_detector(ulog_path, scenario):
+def summarize_detector(ulog_path, scenario, consecutive=3):
     ulog = ULog(str(ulog_path), None, disable_str_exceptions=True)
     status = get_dataset(ulog, "sensor_attack_status")
     valid = np.asarray(status["valid"], dtype=bool)
@@ -513,6 +513,28 @@ def summarize_detector(ulog_path, scenario):
 
         if np.any(finite_cusum):
             result["cusum_max"] = float(np.max(cusum[finite_cusum]))
+
+            # Match calibrate_thresholds.py: the flight-level statistic is the
+            # maximum, over time, of the minimum CUSUM value in each run of M
+            # consecutive valid samples. It is independent of the alert
+            # threshold itself.
+            recent = []
+            alarm_statistic = 0.0
+
+            for is_valid, value in zip(usable, cusum):
+                if not is_valid or not np.isfinite(value):
+                    recent.clear()
+                    continue
+
+                recent.append(float(value))
+
+                if len(recent) > consecutive:
+                    recent.pop(0)
+
+                if len(recent) == consecutive:
+                    alarm_statistic = max(alarm_statistic, min(recent))
+
+            result["alarm_statistic"] = alarm_statistic
 
         if np.any(finite_threshold):
             result["threshold_value"] = float(np.median(threshold_values[finite_threshold]))
@@ -830,7 +852,7 @@ def main():
         "ulog": str(ulog_path),
         "parameters": parameters,
         "events": event_times,
-        "detector": summarize_detector(ulog_path, args.scenario),
+        "detector": summarize_detector(ulog_path, args.scenario, args.consecutive),
     }
 
     if args.scenario == "hover":
