@@ -105,6 +105,7 @@ private:
 		float dt_s{0.f};
 		float acceleration_measured[2] {};
 		float acceleration_actuator[2] {};
+		float thrust_indicator{0.f};
 	};
 
 	struct GpsEvent {
@@ -120,6 +121,7 @@ private:
 		float total_dt_s{0.f};
 		float measured_delta_velocity[2] {};
 		float actuator_delta_velocity[2] {};
+		float thrust_indicator_dt{0.f};
 	};
 
 	void Run() override;
@@ -210,6 +212,7 @@ private:
 		(ParamInt<px4::params::SAD_THR_MAP>) _param_sad_thr_map,
 		(ParamFloat<px4::params::SAD_THR_GAIN>) _param_sad_thr_gain,
 		(ParamFloat<px4::params::SAD_DRAG_K>) _param_sad_drag_k,
+		(ParamBool<px4::params::SAD_DRAG_MOD>) _param_sad_drag_mod,
 		(ParamFloat<px4::params::SAD_GPS_EPH>) _param_sad_gps_eph,
 		(ParamFloat<px4::params::SAD_REG>) _param_sad_reg,
 		(ParamInt<px4::params::SAD_ATK_MASK>) _param_sad_atk_mask,
