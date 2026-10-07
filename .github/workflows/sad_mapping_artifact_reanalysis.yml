@@ -1,0 +1,201 @@
+name: Sensor Attack Detector Mapping Artifact Reanalysis
+
+on:
+  push:
+    branches:
+      - sad-v2-fixed-model
+    paths:
+      - '.github/workflows/sad_mapping_artifact_reanalysis.yml'
+
+jobs:
+  reanalysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sad-actuator-mapping-fit
+          path: build/reanalysis
+          github-token: ${{ github.token }}
+          run-id: 37587396600
+
+      - name: Install parser
+        run: python3 -m pip install pyulog numpy
+
+      - name: Cross-fit actuator physics on preserved ULogs
+        run: |
+          set -eux
+          find build/reanalysis -maxdepth 2 -type f -printf '%p\n' | sort
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          import numpy as np
+          from pyulog import ULog
+
+          root=Path("build/reanalysis")
+          IDLE=0.1
+          LAG_US=200000
+
+          def ds(u,name):
+              xs=[x for x in u.data_list if x.name==name and x.multi_id==0]
+              if len(xs)!=1:
+                  raise RuntimeError(f"{name}[0]: {len(xs)}")
+              return xs[0].data
+
+          def prev(ts,vals,target):
+              idx=np.searchsorted(ts,target,side="right")-1
+              idx=np.clip(idx,0,len(ts)-1)
+              return vals[idx]
+
+          def interp(ts,vals,target):
+              return np.interp(target,ts,vals)
+
+          def dcm(q):
+              w,x,y,z=q.T
+              R=np.empty((len(q),3,3))
+              R[:,0,0]=1-2*(y*y+z*z); R[:,0,1]=2*(x*y-w*z); R[:,0,2]=2*(x*z+w*y)
+              R[:,1,0]=2*(x*y+w*z); R[:,1,1]=1-2*(x*x+z*z); R[:,1,2]=2*(y*z-w*x)
+              R[:,2,0]=2*(x*z-w*y); R[:,2,1]=2*(y*z+w*x); R[:,2,2]=1-2*(x*x+y*y)
+              return R
+
+          def load(path):
+              u=ULog(str(path),None,disable_str_exceptions=True)
+              imu=ds(u,"vehicle_imu")
+              att=ds(u,"vehicle_attitude")
+              act=ds(u,"actuator_outputs")
+              land=ds(u,"vehicle_land_detected")
+              lp=ds(u,"vehicle_local_position")
+              tsp=ds(u,"trajectory_setpoint")
+
+              ti=np.asarray(imu["timestamp_sample"],dtype=np.int64)
+              dt=np.asarray(imu["delta_velocity_dt"],dtype=float)*1e-6
+              dv=np.column_stack([np.asarray(imu[f"delta_velocity[{i}]"],dtype=float) for i in range(3)])
+
+              ta=np.asarray(att["timestamp_sample"],dtype=np.int64)
+              q=np.column_stack([interp(ta,np.asarray(att[f"q[{i}]"],dtype=float),ti) for i in range(4)])
+              q=q/np.maximum(np.linalg.norm(q,axis=1)[:,None],1e-12)
+              R=dcm(q)
+              zaxis=R[:,:,2]
+              y=np.einsum("nij,nj->ni",R,dv)/np.maximum(dt[:,None],1e-9)
+
+              to=np.asarray(act["timestamp"],dtype=np.int64)
+              outs=np.column_stack([np.asarray(act[f"output[{i}]"],dtype=float) for i in range(4)])
+              un=np.clip((prev(to,outs,ti)-1000.0)/1000.0,0.0,1.0)
+              s1=np.sum(un,axis=1)
+              s2=np.sum(un*un,axis=1)
+              soff=np.sum((un+IDLE)**2,axis=1)
+              srot=np.sum(un+IDLE,axis=1)
+
+              phi1=-zaxis[:,:2]*s1[:,None]
+              phi2=-zaxis[:,:2]*s2[:,None]
+              phiq=-zaxis[:,:2]*soff[:,None]
+
+              tlag=ti-LAG_US
+              valid_lag=tlag>=ti[0]
+              def diff_lag(phi):
+                  out=np.empty_like(phi)
+                  for ax in range(2):
+                      out[:,ax]=phi[:,ax]-np.interp(tlag,ti,phi[:,ax])
+                  return out
+              d1=diff_lag(phi1)
+              d2=diff_lag(phi2)
+              dq=diff_lag(phiq)
+
+              tlp=np.asarray(lp["timestamp_sample"],dtype=np.int64)
+              vact=np.column_stack([interp(tlp,np.asarray(lp[k],dtype=float),ti) for k in ("vx","vy","vz")])
+
+              ts=np.asarray(tsp["timestamp"],dtype=np.int64)
+              vsp=np.column_stack([prev(ts,np.asarray(tsp[k],dtype=float),ti) for k in ("vx","vy","vz")])
+              vsp=np.where(np.isfinite(vsp),vsp,0.0)
+
+              def drag(v):
+                  proj=np.sum(v*zaxis,axis=1)
+                  vperp=v-proj[:,None]*zaxis
+                  return -srot[:,None]*vperp[:,:2]
+              drag_actual=drag(vact)
+              drag_sp=drag(vsp)
+
+              tl=np.asarray(land["timestamp"],dtype=np.int64)
+              landed=prev(tl,np.asarray(land["landed"],dtype=bool),ti)
+              finite=(~landed)&valid_lag&(dt>1e-5)&(dt<0.05)
+              finite&=np.all(np.isfinite(y[:,:2]),axis=1)
+              finite&=np.all(np.isfinite(phiq),axis=1)
+              finite&=np.all(np.isfinite(drag_actual),axis=1)&np.all(np.isfinite(drag_sp),axis=1)
+              finite&=(np.linalg.norm(zaxis[:,:2],axis=1)>0.03)
+
+              return {k:v[finite] for k,v in {
+                  "y":y[:,:2],"phi1":phi1,"phi2":phi2,"phiq":phiq,
+                  "d1":d1,"d2":d2,"dq":dq,
+                  "drag_actual":drag_actual,"drag_sp":drag_sp,
+              }.items()}
+
+          data={p.stem:load(p) for p in root.glob("*.ulg")}
+          print("samples", {k:len(v["y"]) for k,v in data.items()})
+
+          def design(d,mode):
+              n=len(d["y"])
+              def st(v): return np.r_[v[:,0],v[:,1]]
+              cols=[np.r_[np.ones(n),np.zeros(n)],np.r_[np.zeros(n),np.ones(n)]]
+              names=["bias_n","bias_e"]
+              if mode=="linear":
+                  cols += [st(d["phi1"]),st(d["d1"])]
+                  names += ["steady_linear","dynamic_linear"]
+              elif mode=="quadratic_idle":
+                  cols += [st(d["phiq"]),st(d["dq"])]
+                  names += ["steady_quad","dynamic_quad"]
+              elif mode=="linear_quadratic":
+                  cols += [st(d["phi1"]),st(d["phi2"]),st(d["d1"]),st(d["d2"])]
+                  names += ["steady_linear","steady_quad","dynamic_linear","dynamic_quad"]
+              elif mode=="linear_drag_sp":
+                  cols += [st(d["phi1"]),st(d["d1"]),st(d["drag_sp"])]
+                  names += ["steady_linear","dynamic_linear","drag_sp"]
+              elif mode=="quadratic_drag_actual":
+                  cols += [st(d["phiq"]),st(d["dq"]),st(d["drag_actual"])]
+                  names += ["steady_quad","dynamic_quad","drag_actual"]
+              elif mode=="quadratic_drag_sp":
+                  cols += [st(d["phiq"]),st(d["dq"]),st(d["drag_sp"])]
+                  names += ["steady_quad","dynamic_quad","drag_sp"]
+              else:
+                  raise ValueError(mode)
+              return np.column_stack(cols),np.r_[d["y"][:,0],d["y"][:,1]],names
+
+          models=[
+              "linear","quadratic_idle","linear_quadratic",
+              "linear_drag_sp","quadratic_drag_actual","quadratic_drag_sp"
+          ]
+          train=data["baseline_turn"]
+          report={"fit_source":"baseline_turn_only","models":{},"ratios_vs_linear":{}}
+          for mode in models:
+              X,y,names=design(train,mode)
+              coef,*_=np.linalg.lstsq(X,y,rcond=None)
+              report["models"][mode]={"coefficients":dict(zip(names,map(float,coef))),"evaluation":{}}
+              for case,d in sorted(data.items()):
+                  Xe,ye,_=design(d,mode)
+                  err=ye-Xe@coef
+                  n=len(d["y"])
+                  e=np.column_stack([err[:n],err[n:]])
+                  mag=np.linalg.norm(e,axis=1)
+                  report["models"][mode]["evaluation"][case]={
+                      "rmse_ne":float(np.sqrt(np.mean(np.sum(e*e,axis=1)))),
+                      "mae_mag":float(np.mean(mag)),
+                      "p95_mag":float(np.percentile(mag,95)),
+                  }
+
+          for case in ("accel_reverse","slalom","hard_turn"):
+              base=report["models"]["linear"]["evaluation"][case]
+              report["ratios_vs_linear"][case]={}
+              for mode in models[1:]:
+                  cur=report["models"][mode]["evaluation"][case]
+                  report["ratios_vs_linear"][case][mode]={
+                      "rmse_ratio":cur["rmse_ne"]/base["rmse_ne"],
+                      "p95_ratio":cur["p95_mag"]/base["p95_mag"],
+                  }
+
+          (root/"reanalysis.json").write_text(json.dumps(report,indent=2)+"\n")
+          print(json.dumps(report,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sad-mapping-artifact-reanalysis
+          path: build/reanalysis/reanalysis.json
+          retention-days: 5
