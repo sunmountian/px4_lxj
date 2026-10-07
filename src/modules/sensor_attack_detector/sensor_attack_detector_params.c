@@ -121,6 +121,14 @@ PARAM_DEFINE_FLOAT(SAD_THR_GAIN, 3.47118998f);
 PARAM_DEFINE_FLOAT(SAD_DRAG_K, 0.f);
 
 /**
+ * Modulate drag coefficient by relative actuator thrust indicator
+ *
+ * @boolean
+ * @group Sensor Attack Detector
+ */
+PARAM_DEFINE_INT32(SAD_DRAG_MOD, 0);
+
+/**
  * Maximum accepted GPS horizontal position error
  *
  * @unit m
