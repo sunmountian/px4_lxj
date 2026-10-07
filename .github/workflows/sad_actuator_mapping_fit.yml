@@ -7,6 +7,10 @@ on:
     paths:
       - '.github/workflows/sad_actuator_mapping_fit.yml'
 
+concurrency:
+  group: sad-actuator-mapping-fit
+  cancel-in-progress: true
+
 jobs:
   mapping-fit:
     runs-on: ubuntu-latest
@@ -66,9 +70,9 @@ jobs:
           root=Path("build/sad_mapping_fit")
 
           def ds(ulog,name):
-              xs=[x for x in ulog.data_list if x.name==name]
+              xs=[x for x in ulog.data_list if x.name==name and x.multi_id==0]
               if len(xs)!=1:
-                  raise RuntimeError(f"{name}: {len(xs)} instances")
+                  raise RuntimeError(f"{name}[0]: {len(xs)} instances")
               return xs[0].data
 
           def prev(ts, vals, target):
