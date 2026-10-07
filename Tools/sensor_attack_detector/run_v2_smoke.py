@@ -52,6 +52,8 @@ def parse_args():
     parser.add_argument("--setpoint-rate", type=float, default=20.0)
     parser.add_argument("--url", default="udpin:0.0.0.0:14540")
     parser.add_argument("--thr-gain", type=float, default=3.47118998)
+    parser.add_argument("--map-mode", type=int, choices=(0, 1), default=0)
+    parser.add_argument("--map-idle", type=float, default=0.0)
     parser.add_argument("--weight-acceleration", type=float, default=1.0)
     parser.add_argument("--weight-velocity", type=float, default=1.0)
     parser.add_argument("--weight-position", type=float, default=1.0)
@@ -382,6 +384,8 @@ def apply_detector_parameters(process, args):
         "COM_OF_LOSS_T": 2.0,
         "MIS_TAKEOFF_ALT": args.takeoff_altitude,
         "SAD_THR_GAIN": args.thr_gain,
+        "SAD_MAP_MODE": args.map_mode,
+        "SAD_MAP_IDLE": args.map_idle,
         "SAD_WA": args.weight_acceleration,
         "SAD_WV": args.weight_velocity,
         "SAD_WP": args.weight_position,
