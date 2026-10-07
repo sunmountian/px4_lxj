@@ -51,7 +51,8 @@ def parse_args():
     parser.add_argument("--takeoff-altitude", type=float, default=3.0)
     parser.add_argument("--setpoint-rate", type=float, default=20.0)
     parser.add_argument("--url", default="udpin:0.0.0.0:14540")
-    parser.add_argument("--thr-gain", type=float, default=3.47118998)\n    parser.add_argument("--thr-map", type=int, choices=(0, 1), default=0)
+    parser.add_argument("--thr-gain", type=float, default=3.47118998)
+    parser.add_argument("--thr-map", type=int, choices=(0, 1), default=0)
     parser.add_argument("--weight-acceleration", type=float, default=1.0)
     parser.add_argument("--weight-velocity", type=float, default=1.0)
     parser.add_argument("--weight-position", type=float, default=1.0)
@@ -110,7 +111,8 @@ def terminate_process(process):
 
 
 def shell(process, command, settle_s=0.08):
-    process.stdin.write(command + "\n")
+    process.stdin.write(command + "
+")
     process.stdin.flush()
     time.sleep(settle_s)
 
@@ -381,7 +383,8 @@ def apply_detector_parameters(process, args):
         "COM_RC_IN_MODE": 4,
         "COM_OF_LOSS_T": 2.0,
         "MIS_TAKEOFF_ALT": args.takeoff_altitude,
-        "SAD_THR_MAP": args.thr_map,\n        "SAD_THR_GAIN": args.thr_gain,
+        "SAD_THR_MAP": args.thr_map,
+        "SAD_THR_GAIN": args.thr_gain,
         "SAD_WA": args.weight_acceleration,
         "SAD_WV": args.weight_velocity,
         "SAD_WP": args.weight_position,
@@ -785,7 +788,8 @@ def main():
                     f"param set SAD_THRESH {args.threshold + marker_delta}",
                     0.15,
                 )
-                trigger_file.write_text("trigger\n", encoding="utf-8")
+                trigger_file.write_text("trigger
+", encoding="utf-8")
                 event_times["attack_trigger_wall"] = time.time()
                 stream_velocity(
                     master,
@@ -843,7 +847,8 @@ def main():
             "maneuver": args.maneuver,
             "speed_m_s": args.speed,
         }
-    metadata_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    metadata_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "
+")
     print(json.dumps(result, indent=2, sort_keys=True))
     print(f"result={metadata_path}")
     print(f"ulog={ulog_path}")
