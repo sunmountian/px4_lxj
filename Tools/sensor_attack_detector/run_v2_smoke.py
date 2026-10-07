@@ -63,6 +63,7 @@ def parse_args():
     parser.add_argument("--pva-north", type=float, default=100.0)
     parser.add_argument("--pva-east", type=float, default=0.0)
     parser.add_argument("--pva-ramp", type=float, default=20.0)
+    parser.add_argument("--pva-profile", choices=("smootherstep", "sinusoidal"), default="smootherstep")
     parser.add_argument("--pva-observation", type=float, default=8.0)
     parser.add_argument("--glrt-mean", type=float, default=0.0)
     parser.add_argument("--glrt-sd", type=float, default=1.0)
@@ -698,6 +699,7 @@ def main():
                 "PX4_STEADY_ATTACK_EAST_M": str(args.pva_east),
                 "PX4_STEADY_ATTACK_DOWN_M": "0",
                 "PX4_STEADY_ATTACK_RAMP_S": str(args.pva_ramp),
+                "PX4_STEADY_ATTACK_PROFILE": args.pva_profile,
                 "PX4_STEADY_ATTACK_GPS": "1",
                 "PX4_STEADY_ATTACK_GPS_VEL_CONSISTENT": "1",
                 "PX4_STEADY_ATTACK_IMU": "1",
@@ -799,6 +801,7 @@ def main():
             "north_m": args.pva_north,
             "east_m": args.pva_east,
             "ramp_s": args.pva_ramp,
+            "profile": args.pva_profile,
             "observation_s": args.pva_observation,
         }
     elif args.scenario == "turn":
