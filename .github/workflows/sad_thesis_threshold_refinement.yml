@@ -1,0 +1,297 @@
+name: Sensor Attack Detector Thesis Threshold Refinement
+
+on:
+  push:
+    branches:
+      - sad-v2-fixed-model
+    paths:
+      - '.github/workflows/sad_thesis_threshold_refinement.yml'
+
+concurrency:
+  group: sad-thesis-threshold-refinement
+  cancel-in-progress: true
+
+jobs:
+  calibrate:
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [0,1,2,3]
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+      - name: Prepare
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+      - name: Collect calibration normals
+        run: |
+          set -eux
+          OUT=build/sad_thr_refine/cal_${{ matrix.group }}
+          rm -rf build/sad_v2_smoke "$OUT"
+          mkdir -p "$OUT"
+          COMMON="--thr-map 0 --thr-gain 3.47118998 --drag-k 0.20 --drag-mod 0 --normal-scale-mean -0.33720698952674866 --normal-scale-sd 0.02 --normal-dynamic-mean 0.42821773886680603 --dynamic-lag 0.2 --normal-dynamic-sd 0.05 --weight-acceleration 311.40721173819645 --weight-velocity 226.9711056439403 --weight-position 159.00814015827592 --glrt-mean 4.917112030075899 --glrt-sd 6.4710112836256135 --threshold 1000000 --cusum-drift 0.5 --consecutive 3 --attack-mask 7"
+          run_case () {
+            LABEL="$1"; shift
+            MARKER=$(mktemp); touch "$MARKER"
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py "$@" $COMMON
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -name result.json -type f -newer "$MARKER" | head -n 1)
+            rm -f "$MARKER"; test -n "$RESULT"
+            cp "$RESULT" "$OUT/${LABEL}.json"
+          }
+          G=${{ matrix.group }}
+          if [ "$G" = 0 ]; then
+            run_case c00_hover --scenario hover
+            run_case c01_turn --scenario turn --speed 0.75 --turn-duration 5 --straight-before 10 --straight-after 14
+            run_case c02_turn --scenario turn --speed 1.05 --turn-duration 7 --straight-before 10 --straight-after 14
+            run_case c03_accel --scenario maneuver --maneuver accel --speed 1.85
+            run_case c04_accel --scenario maneuver --maneuver accel --speed 2.05
+          elif [ "$G" = 1 ]; then
+            run_case c05_hover --scenario hover
+            run_case c06_turn --scenario turn --speed 0.85 --turn-duration 8 --straight-before 10 --straight-after 14
+            run_case c07_turn --scenario turn --speed 1.15 --turn-duration 4 --straight-before 10 --straight-after 14
+            run_case c08_accel --scenario maneuver --maneuver accel --speed 1.95
+            run_case c09_accel --scenario maneuver --maneuver accel --speed 2.15
+          elif [ "$G" = 2 ]; then
+            run_case c10_hover --scenario hover
+            run_case c11_turn --scenario turn --speed 0.95 --turn-duration 5 --straight-before 10 --straight-after 14
+            run_case c12_turn --scenario turn --speed 1.25 --turn-duration 7 --straight-before 10 --straight-after 14
+            run_case c13_accel --scenario maneuver --maneuver accel --speed 1.9
+            run_case c14_accel --scenario maneuver --maneuver accel --speed 2.2
+          else
+            run_case c15_hover --scenario hover
+            run_case c16_turn --scenario turn --speed 0.8 --turn-duration 7 --straight-before 10 --straight-after 14
+            run_case c17_turn --scenario turn --speed 1.2 --turn-duration 6 --straight-before 10 --straight-after 14
+            run_case c18_accel --scenario maneuver --maneuver accel --speed 2.0
+            run_case c19_accel --scenario maneuver --maneuver accel --speed 2.1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: threshold-cal-${{ matrix.group }}
+          path: build/sad_thr_refine/cal_${{ matrix.group }}
+          retention-days: 5
+
+  threshold:
+    needs: calibrate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: threshold-cal-*
+          path: calibration
+          merge-multiple: true
+      - name: Compute refined threshold
+        run: |
+          python3 - <<'PY'
+          import json, math
+          from pathlib import Path
+          files=sorted(Path("calibration").glob("*.json"))
+          if len(files)!=20:
+              raise SystemExit(f"expected 20 calibration results, got {len(files)}")
+          rows=[]
+          for p in files:
+              r=json.load(open(p)); d=r["detector"]
+              stat=d.get("alarm_statistic")
+              if stat is None:
+                  stat=d.get("cusum_max")
+              rows.append({"case":p.stem,"alarm_statistic":float(stat),"cusum_max":float(d["cusum_max"])})
+          vals=sorted(x["alarm_statistic"] for x in rows)
+          # With 20 calibration flights and 5% target, the finite-sample order-statistic rank is 20.
+          threshold=float(math.nextafter(vals[-1], math.inf))
+          out={"calibration_flights":20,"target_flight_false_alarm_rate":0.05,
+               "order_statistic_rank":20,"SAD_THRESH":threshold,
+               "maximum_calibration_alarm_statistic":vals[-1],"rows":rows}
+          Path("refined_threshold.json").write_text(json.dumps(out,indent=2)+"\n")
+          print(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: refined-threshold
+          path: refined_threshold.json
+          retention-days: 5
+
+  validate:
+    needs: threshold
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [0,1,2,3]
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+      - uses: actions/download-artifact@v4
+        with:
+          name: refined-threshold
+          path: threshold
+      - name: Prepare
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+      - name: Validate held-out normals
+        run: |
+          set -eux
+          THR=$(python3 -c 'import json; print(json.load(open("threshold/refined_threshold.json"))["SAD_THRESH"])')
+          OUT=build/sad_thr_refine/test_${{ matrix.group }}
+          rm -rf build/sad_v2_smoke "$OUT"; mkdir -p "$OUT"
+          COMMON="--thr-map 0 --thr-gain 3.47118998 --drag-k 0.20 --drag-mod 0 --normal-scale-mean -0.33720698952674866 --normal-scale-sd 0.02 --normal-dynamic-mean 0.42821773886680603 --dynamic-lag 0.2 --normal-dynamic-sd 0.05 --weight-acceleration 311.40721173819645 --weight-velocity 226.9711056439403 --weight-position 159.00814015827592 --glrt-mean 4.917112030075899 --glrt-sd 6.4710112836256135 --threshold $THR --cusum-drift 0.5 --consecutive 3 --attack-mask 7"
+          run_case () {
+            LABEL="$1"; shift
+            MARKER=$(mktemp); touch "$MARKER"
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py "$@" $COMMON
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -name result.json -type f -newer "$MARKER" | head -n 1)
+            rm -f "$MARKER"; test -n "$RESULT"
+            cp "$RESULT" "$OUT/${LABEL}.json"
+          }
+          G=${{ matrix.group }}
+          if [ "$G" = 0 ]; then
+            run_case t00_hover --scenario hover
+            run_case t01_turn --scenario turn --speed 0.78 --turn-duration 6 --straight-before 10 --straight-after 14
+            run_case t02_turn --scenario turn --speed 1.08 --turn-duration 5 --straight-before 10 --straight-after 14
+            run_case t03_accel --scenario maneuver --maneuver accel --speed 1.88
+            run_case t04_accel --scenario maneuver --maneuver accel --speed 2.08
+          elif [ "$G" = 1 ]; then
+            run_case t05_hover --scenario hover
+            run_case t06_turn --scenario turn --speed 0.88 --turn-duration 7 --straight-before 10 --straight-after 14
+            run_case t07_turn --scenario turn --speed 1.18 --turn-duration 8 --straight-before 10 --straight-after 14
+            run_case t08_accel --scenario maneuver --maneuver accel --speed 1.98
+            run_case t09_accel --scenario maneuver --maneuver accel --speed 2.18
+          elif [ "$G" = 2 ]; then
+            run_case t10_hover --scenario hover
+            run_case t11_turn --scenario turn --speed 0.98 --turn-duration 4 --straight-before 10 --straight-after 14
+            run_case t12_turn --scenario turn --speed 1.28 --turn-duration 6 --straight-before 10 --straight-after 14
+            run_case t13_accel --scenario maneuver --maneuver accel --speed 1.93
+            run_case t14_accel --scenario maneuver --maneuver accel --speed 2.13
+          else
+            run_case t15_hover --scenario hover
+            run_case t16_turn --scenario turn --speed 0.83 --turn-duration 5 --straight-before 10 --straight-after 14
+            run_case t17_turn --scenario turn --speed 1.23 --turn-duration 7 --straight-before 10 --straight-after 14
+            run_case t18_accel --scenario maneuver --maneuver accel --speed 2.03
+            run_case t19_accel --scenario maneuver --maneuver accel --speed 2.23
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: threshold-test-${{ matrix.group }}
+          path: build/sad_thr_refine/test_${{ matrix.group }}
+          retention-days: 5
+
+  attack:
+    needs: threshold
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+      - uses: actions/download-artifact@v4
+        with:
+          name: refined-threshold
+          path: threshold
+      - name: Prepare
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+      - name: Validate attacks
+        run: |
+          set -eux
+          THR=$(python3 -c 'import json; print(json.load(open("threshold/refined_threshold.json"))["SAD_THRESH"])')
+          OUT=build/sad_thr_refine/attacks
+          rm -rf build/sad_v2_smoke "$OUT"; mkdir -p "$OUT"
+          COMMON="--thr-map 0 --thr-gain 3.47118998 --drag-k 0.20 --drag-mod 0 --normal-scale-mean -0.33720698952674866 --normal-scale-sd 0.02 --normal-dynamic-mean 0.42821773886680603 --dynamic-lag 0.2 --normal-dynamic-sd 0.05 --weight-acceleration 311.40721173819645 --weight-velocity 226.9711056439403 --weight-position 159.00814015827592 --glrt-mean 4.917112030075899 --glrt-sd 6.4710112836256135 --threshold $THR --cusum-drift 0.5 --consecutive 3 --attack-mask 7"
+          run_case () {
+            LABEL="$1"; shift
+            MARKER=$(mktemp); touch "$MARKER"
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py "$@" $COMMON
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -name result.json -type f -newer "$MARKER" | head -n 1)
+            rm -f "$MARKER"; test -n "$RESULT"
+            cp "$RESULT" "$OUT/${LABEL}.json"
+          }
+          run_case attack_20 --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 20 --pva-observation 14
+          run_case attack_30 --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 30 --pva-observation 16
+          run_case attack_40 --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 40 --pva-observation 20
+      - uses: actions/upload-artifact@v4
+        with:
+          name: threshold-attacks
+          path: build/sad_thr_refine/attacks
+          retention-days: 5
+
+  summarize:
+    needs: [threshold, validate, attack]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: threshold-test-*
+          path: test
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: threshold-attacks
+          path: attacks
+      - uses: actions/download-artifact@v4
+        with:
+          name: refined-threshold
+          path: threshold
+      - name: Summarize final threshold validation
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          tests=[]
+          for p in sorted(Path("test").glob("*.json")):
+              r=json.load(open(p)); d=r["detector"]
+              tests.append({"case":p.stem,"alert_samples":d.get("alert_samples",0),
+                            "cusum_max":d.get("cusum_max"),"glrt_mean":d.get("glrt_mean")})
+          if len(tests)!=20:
+              raise SystemExit(f"expected 20 held-out normals, got {len(tests)}")
+          attacks=[]
+          for p in sorted(Path("attacks").glob("*.json")):
+              r=json.load(open(p)); d=r["detector"]
+              attacks.append({"case":p.stem,"pre_attack_alert_count":d.get("pre_attack_alert_count"),
+                              "post_attack_alert_count":d.get("post_attack_alert_count"),
+                              "first_alert_delay_s":d.get("first_alert_delay_s"),
+                              "post_attack_glrt_mean":d.get("post_attack_glrt_mean")})
+          thr=json.load(open("threshold/refined_threshold.json"))
+          alerts=sum(bool(x["alert_samples"]) for x in tests)
+          out={"threshold":thr,"held_out_normal_flights":20,"held_out_alert_flights":alerts,
+               "held_out_flight_false_alarm_rate":alerts/20,"attacks":attacks}
+          Path("threshold_refinement_summary.json").write_text(json.dumps(out,indent=2)+"\n")
+          print(json.dumps(out,indent=2))
+          if alerts>1:
+              raise SystemExit(f"held-out FAR still exceeds 5%: {alerts}/20")
+          for a in attacks:
+              if a["pre_attack_alert_count"] not in (0,None) or not a["post_attack_alert_count"]:
+                  raise SystemExit(f"attack validation failed: {a}")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: threshold-refinement-summary
+          path: threshold_refinement_summary.json
+          retention-days: 5
