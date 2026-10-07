@@ -1,0 +1,97 @@
+name: Sensor Attack Detector V3 Drag Screen
+
+on:
+  push:
+    branches:
+      - sad-v3-drag-consistent
+    paths:
+      - '.github/workflows/sad_v3_drag_screen.yml'
+
+concurrency:
+  group: sad-v3-drag-screen
+  cancel-in-progress: true
+
+jobs:
+  screen:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Prepare and unit test
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make tests TESTFILTER=SensorAttackDetector
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+
+      - name: Run V3 structural screen
+        run: |
+          set -eux
+          OUT=build/sad_v3_drag_screen
+          rm -rf build/sad_v2_smoke "$OUT"
+          mkdir -p "$OUT"
+
+          # Development-only coefficients from independent corrected nominal
+          # ULog mechanism fitting. No final threshold/normalization is used.
+          COMMON="--thr-gain 3.47118998 --normal-scale-mean -0.01662 --normal-scale-sd 1 --normal-dynamic-mean 0.0038 --normal-dynamic-sd 1 --drag-rate 0.369 --weight-acceleration 142.17990926253765 --weight-velocity 71.20519081577794 --weight-position 50.66817247677383 --regularization 0.1 --glrt-mean 0 --glrt-sd 1 --threshold 1000000 --cusum-drift 0.5 --consecutive 3"
+
+          run_one () {
+            LABEL="$1"; shift
+            MARKER=$(mktemp)
+            touch "$MARKER"
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py "$@" $COMMON
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -name result.json -type f -newer "$MARKER" | head -n 1)
+            rm -f "$MARKER"
+            test -n "$RESULT"
+            cp "$RESULT" "$OUT/${LABEL}.json"
+          }
+
+          run_one normal_turn --scenario turn --speed 1.3 --turn-duration 8 --straight-before 10 --straight-after 14
+          run_one normal_accel --scenario maneuver --maneuver accel --speed 2.2
+          run_one normal_slalom --scenario maneuver --maneuver slalom --speed 1.8
+          run_one normal_hard --scenario maneuver --maneuver hard-turn --speed 2.2
+
+          run_one attack_100_20 --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 20 --pva-observation 12
+          run_one attack_100_40 --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 40 --pva-observation 24
+          run_one attack_100_50 --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 50 --pva-observation 30
+          run_one attack_100_60 --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 60 --pva-observation 36
+          run_one attack_sine_100_20 --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 20 --pva-observation 12 --pva-profile sinusoidal
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path("build/sad_v3_drag_screen")
+          rows=[]
+          for p in sorted(root.glob("*.json")):
+              if p.name=="summary.json": continue
+              r=json.load(open(p)); d=r["detector"]
+              rows.append({
+                  "case":p.stem,
+                  "scenario":r["scenario"],
+                  "glrt_mean":d.get("glrt_mean"),
+                  "glrt_p95":d.get("glrt_p95"),
+                  "glrt_max":d.get("glrt_max"),
+                  "pre_attack_glrt_mean":d.get("pre_attack_glrt_mean"),
+                  "pre_attack_glrt_max":d.get("pre_attack_glrt_max"),
+                  "post_attack_glrt_mean":d.get("post_attack_glrt_mean"),
+                  "post_attack_glrt_max":d.get("post_attack_glrt_max"),
+              })
+          (root/"summary.json").write_text(json.dumps(rows,indent=2)+"\n")
+          print(json.dumps(rows,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sad-v3-drag-screen
+          path: build/sad_v3_drag_screen
+          retention-days: 5
