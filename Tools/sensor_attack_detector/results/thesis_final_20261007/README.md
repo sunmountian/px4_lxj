@@ -83,3 +83,40 @@ attack-observability scaling with trajectory curvature (approximately B/T^2).
 
 These are PX4 SITL results. They should not be described as hardware-flight
 evidence.
+
+
+## Independent false-alarm follow-up
+
+After freezing the nominal model, two additional independent nominal validation
+batches were run to check flight-level false alarms beyond the original six
+held-out flights.
+
+- Frozen nominal FAR validation (20 flights) at the frozen threshold
+  `SAD_THRESH = 56.313146192854525`: 2 / 20 flights alerted.
+- Threshold-refinement held-out validation (20 new flights) used an independently
+  re-estimated threshold of 55.613822937011726 and produced 0 / 20 alerted
+  flights.
+
+Because the second independently estimated threshold is slightly *lower* than
+the frozen threshold while producing zero alerts on its held-out batch, the two
+batches indicate ordinary finite-sample / run-to-run variation rather than a
+systematic loss of nominal separation. We therefore retain the original frozen
+threshold 56.313146192854525 instead of post-hoc tuning it to one validation
+batch. At the retained threshold, the first 20-flight batch has 10% FAR and the
+second batch would have no more alerts than observed at the lower threshold;
+pooled over the two independent 20-flight follow-up batches this gives at most
+2 / 40 = 5% flight-level FAR. Including the original six held-out flights gives
+2 / 46 observed false-alert flights across all independent nominal checks.
+
+The threshold-refinement attack recheck still detected all tested attacks with
+zero pre-attack alerts:
+
+| Attack | First alert delay (s) | Post-attack GLRT mean | Detected |
+|---|---:|---:|---|
+| +North 100 m / 20 s | 4.040 | 315.392 | yes |
+| +North 100 m / 30 s | 6.104 | 72.987 | yes |
+| +North 100 m / 40 s | 8.900 | 25.620 | yes |
+
+The refinement run is GitHub Actions run 37625886666. The lower 55.61 threshold
+was used only as an independent sensitivity/validation experiment and is not the
+frozen thesis default.
