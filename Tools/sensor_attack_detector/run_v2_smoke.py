@@ -60,6 +60,7 @@ def parse_args():
     parser.add_argument("--normal-scale-sd", type=float, default=100.0)
     parser.add_argument("--normal-dynamic-mean", type=float, default=0.0)
     parser.add_argument("--normal-dynamic-sd", type=float, default=100.0)
+    parser.add_argument("--drag-rate", type=float, default=0.0)
     parser.add_argument("--pva-north", type=float, default=100.0)
     parser.add_argument("--pva-east", type=float, default=0.0)
     parser.add_argument("--pva-ramp", type=float, default=20.0)
@@ -390,6 +391,7 @@ def apply_detector_parameters(process, args):
         "SAD_AS_SD": args.normal_scale_sd,
         "SAD_AD_MU": args.normal_dynamic_mean,
         "SAD_AD_SD": args.normal_dynamic_sd,
+        "SAD_DRAG": args.drag_rate,
         "SAD_GLRT_MU": args.glrt_mean,
         "SAD_GLRT_SD": args.glrt_sd,
         "SAD_CUS_DR": args.cusum_drift,
