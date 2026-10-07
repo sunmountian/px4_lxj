@@ -42,6 +42,7 @@
 #include <uORB/topics/sensor_gps.h>
 #include <uORB/topics/vehicle_attitude.h>
 #include <uORB/topics/vehicle_imu.h>
+#include <uORB/topics/vehicle_local_position_setpoint.h>
 
 using namespace time_literals;
 
@@ -74,6 +75,7 @@ private:
 	static constexpr uint64_t kAlignmentWaitUs{100_ms};
 	static constexpr uint64_t kMaximumAttitudeGapUs{100_ms};
 	static constexpr uint64_t kMaximumActuatorAgeUs{100_ms};
+	static constexpr uint64_t kMaximumReferenceAgeUs{1_s};
 	static constexpr uint64_t kMaximumWindowGapUs{150_ms};
 	static constexpr uint64_t kDynamicLagUs{200_ms};
 	static constexpr size_t kMotorCount{4};
@@ -81,6 +83,7 @@ private:
 	static constexpr size_t kPendingImuCapacity{128};
 	static constexpr size_t kAttitudeCapacity{128};
 	static constexpr size_t kActuatorCapacity{128};
+	static constexpr size_t kReferenceCapacity{128};
 	static constexpr size_t kProcessedImuCapacity{720};
 	static constexpr size_t kGpsCapacity{160};
 
@@ -99,6 +102,13 @@ private:
 	struct ActuatorEvent {
 		uint64_t timestamp{0};
 		float thrust_indicator{0.f};
+		float drag_indicator{0.f};
+	};
+
+	struct ReferenceEvent {
+		uint64_t timestamp{0};
+		float velocity[3] {};
+		bool velocity_valid{false};
 	};
 
 	struct ImuEvent {
@@ -128,15 +138,18 @@ private:
 	void ingestAttitude();
 	void ingestActuator();
 	void ingestGps();
+	void ingestReference();
 	void ingestImu();
 	void processPendingImu();
 	void aggregateAlignedImu(const PendingImuEvent &imu, const matrix::Quatf &q_nb,
-				 float thrust_indicator);
+				 float thrust_indicator, float drag_indicator,
+				 const float (&reference_velocity)[3]);
 	void flushImuBin();
 	void trimLongBuffers();
 
 	bool interpolateAttitude(uint64_t timestamp, matrix::Quatf &q_nb) const;
-	bool findActuator(uint64_t timestamp, float &thrust_indicator) const;
+	bool findActuator(uint64_t timestamp, float &thrust_indicator, float &drag_indicator) const;
+	bool findReferenceVelocity(uint64_t timestamp, float (&velocity)[3]) const;
 	bool interpolateGps(uint64_t timestamp, GpsEvent &gps) const;
 	bool integrateActuator(uint64_t start_timestamp, uint64_t end_timestamp,
 			       float (&delta_velocity)[2], float (&delta_position)[2],
@@ -162,12 +175,14 @@ private:
 	uORB::Subscription _sensor_gps_sub{ORB_ID(sensor_gps)};
 	uORB::Subscription _actuator_motors_sub{ORB_ID(actuator_motors)};
 	uORB::Subscription _actuator_outputs_sub{ORB_ID(actuator_outputs)};
+	uORB::Subscription _trajectory_setpoint_sub{ORB_ID(trajectory_setpoint)};
 	uORB::SubscriptionInterval _parameter_update_sub{ORB_ID(parameter_update), 1_s};
 	uORB::Publication<sensor_attack_status_s> _status_pub{ORB_ID(sensor_attack_status)};
 
 	EventBuffer<PendingImuEvent, kPendingImuCapacity> _pending_imu_buffer;
 	EventBuffer<AttitudeEvent, kAttitudeCapacity> _attitude_buffer;
 	EventBuffer<ActuatorEvent, kActuatorCapacity> _actuator_buffer;
+	EventBuffer<ReferenceEvent, kReferenceCapacity> _reference_buffer;
 	EventBuffer<ImuEvent, kProcessedImuCapacity> _imu_buffer;
 	EventBuffer<GpsEvent, kGpsCapacity> _gps_buffer;
 
@@ -178,6 +193,7 @@ private:
 	uint64_t _origin_timestamp{0};
 	uint64_t _last_attitude_timestamp{0};
 	uint64_t _last_actuator_timestamp{0};
+	uint64_t _last_reference_timestamp{0};
 	uint64_t _last_gps_message_timestamp{0};
 	uint64_t _last_imu_sample_timestamp{0};
 	uint64_t _last_evaluation_timestamp{0};
@@ -208,6 +224,7 @@ private:
 		(ParamFloat<px4::params::SAD_THR_GAIN>) _param_sad_thr_gain,
 		(ParamInt<px4::params::SAD_MAP_MODE>) _param_sad_map_mode,
 		(ParamFloat<px4::params::SAD_MAP_IDLE>) _param_sad_map_idle,
+		(ParamFloat<px4::params::SAD_DRAG_GAIN>) _param_sad_drag_gain,
 		(ParamFloat<px4::params::SAD_GPS_EPH>) _param_sad_gps_eph,
 		(ParamFloat<px4::params::SAD_REG>) _param_sad_reg,
 		(ParamFloat<px4::params::SAD_AS_MU>) _param_sad_as_mu,
