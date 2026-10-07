@@ -765,6 +765,13 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 				  / static_cast<float>(kWindowDurationUs);
 		float attack_basis[AttackBasis::kSize] {};
 		AttackBasis::evaluate(tau, attack_basis);
+
+		if ((_param_sad_atk_mask.get() & 1) == 0) {
+			for (float &value : attack_basis) {
+				value = 0.f;
+			}
+		}
+
 		float delayed_acceleration[2] {};
 
 		if (!interpolateActuatorAcceleration(center_timestamp - kDynamicLagUs, delayed_acceleration)) {
@@ -818,6 +825,18 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 		float position_basis[AttackBasis::kSize] {};
 		AttackBasis::evaluateIntegral(tau, velocity_basis);
 		AttackBasis::evaluateDoubleIntegral(tau, position_basis);
+
+		if ((_param_sad_atk_mask.get() & 2) == 0) {
+			for (float &value : velocity_basis) {
+				value = 0.f;
+			}
+		}
+
+		if ((_param_sad_atk_mask.get() & 4) == 0) {
+			for (float &value : position_basis) {
+				value = 0.f;
+			}
+		}
 
 		for (size_t coefficient = 0; coefficient < AttackBasis::kSize; ++coefficient) {
 			velocity_basis[coefficient] *= window_s;
