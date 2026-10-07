@@ -1,0 +1,22 @@
+name: Sensor Attack Detector PyULog Bundle
+
+on:
+  push:
+    branches:
+      - sad-v2-fixed-model
+    paths:
+      - '.github/workflows/sad_pyulog_bundle.yml'
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build local analysis bundle
+        run: |
+          mkdir -p bundle
+          python3 -m pip install --disable-pip-version-check --target bundle pyulog numpy
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sad-pyulog-bundle
+          path: bundle
+          retention-days: 2
