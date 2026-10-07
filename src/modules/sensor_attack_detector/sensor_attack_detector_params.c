@@ -87,6 +87,17 @@ PARAM_DEFINE_FLOAT(SAD_WP, 1.f);
 PARAM_DEFINE_INT32(SAD_ACT_SRC, 1);
 
 /**
+ * Actuator thrust-indicator mapping
+ *
+ * @value 0 linear sum of normalized motor commands
+ * @value 1 sum of squared normalized motor commands
+ * @min 0
+ * @max 1
+ * @group Sensor Attack Detector
+ */
+PARAM_DEFINE_INT32(SAD_THR_MAP, 0);
+
+/**
  * Acceleration per summed normalized motor command
  *
  * @unit m/s^2
