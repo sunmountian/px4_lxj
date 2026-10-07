@@ -832,8 +832,12 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 		GpsEvent gps_at_sample{};
 		float delayed_acceleration[2] {};
 
-		if (!interpolateActuatorAcceleration(center_timestamp - kDynamicLagUs, delayed_acceleration)
-		    || !interpolateGps(center_timestamp, gps_at_sample)) {
+		if (!interpolateActuatorAcceleration(center_timestamp - kDynamicLagUs, delayed_acceleration)) {
+			_data_quality_flags |= sensor_attack_status_s::DATA_QUALITY_WINDOW_COVERAGE;
+			return false;
+		}
+
+		if ((drag_rate > 0.f) && !interpolateGps(center_timestamp, gps_at_sample)) {
 			_data_quality_flags |= sensor_attack_status_s::DATA_QUALITY_WINDOW_COVERAGE;
 			return false;
 		}
@@ -892,14 +896,16 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 		float drag_position_integral[2] {};
 		float drag_covered_time_s = 0.f;
 
-		if (!integrateGpsVelocity(start_timestamp, event.timestamp, drag_velocity_integral,
-					 drag_position_integral, drag_covered_time_s)
-		    || (drag_covered_time_s + static_cast<float>(kMaximumWindowGapUs) * 1e-6f < elapsed_s)) {
-			_data_quality_flags |= sensor_attack_status_s::DATA_QUALITY_WINDOW_COVERAGE;
-			return false;
-		}
-
 		const float drag_rate = fmaxf(_param_sad_drag.get(), 0.f);
+
+		if (drag_rate > 0.f) {
+			if (!integrateGpsVelocity(start_timestamp, event.timestamp, drag_velocity_integral,
+						 drag_position_integral, drag_covered_time_s)
+			    || (drag_covered_time_s + static_cast<float>(kMaximumWindowGapUs) * 1e-6f < elapsed_s)) {
+				_data_quality_flags |= sensor_attack_status_s::DATA_QUALITY_WINDOW_COVERAGE;
+				return false;
+			}
+		}
 		float first_integral_basis[AttackBasis::kSize] {};
 		float second_integral_basis[AttackBasis::kSize] {};
 		float third_integral_basis[AttackBasis::kSize] {};
