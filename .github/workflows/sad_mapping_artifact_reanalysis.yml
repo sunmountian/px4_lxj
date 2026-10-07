@@ -113,6 +113,11 @@ jobs:
                   return -srot[:,None]*vperp[:,:2]
               drag_actual=drag(vact)
               drag_sp=drag(vsp)
+              def drag_pure_sum(v):
+                  proj=np.sum(v*zaxis,axis=1)
+                  vperp=v-proj[:,None]*zaxis
+                  return -s1[:,None]*vperp[:,:2]
+              drag_sp_su=drag_pure_sum(vsp)
 
               tl=np.asarray(land["timestamp"],dtype=np.int64)
               landed=prev(tl,np.asarray(land["landed"],dtype=bool),ti)
@@ -125,7 +130,7 @@ jobs:
               return {k:v[finite] for k,v in {
                   "y":y[:,:2],"phi1":phi1,"phi2":phi2,"phiq":phiq,
                   "d1":d1,"d2":d2,"dq":dq,
-                  "drag_actual":drag_actual,"drag_sp":drag_sp,
+                  "drag_actual":drag_actual,"drag_sp":drag_sp,"drag_sp_su":drag_sp_su,
               }.items()}
 
           data={p.stem:load(p) for p in root.glob("*.ulg")}
@@ -148,6 +153,9 @@ jobs:
               elif mode=="linear_drag_sp":
                   cols += [st(d["phi1"]),st(d["d1"]),st(d["drag_sp"])]
                   names += ["steady_linear","dynamic_linear","drag_sp"]
+              elif mode=="linear_drag_sp_su":
+                  cols += [st(d["phi1"]),st(d["d1"]),st(d["drag_sp_su"])]
+                  names += ["steady_linear","dynamic_linear","drag_sp_su"]
               elif mode=="quadratic_drag_actual":
                   cols += [st(d["phiq"]),st(d["dq"]),st(d["drag_actual"])]
                   names += ["steady_quad","dynamic_quad","drag_actual"]
@@ -160,7 +168,7 @@ jobs:
 
           models=[
               "linear","quadratic_idle","linear_quadratic",
-              "linear_drag_sp","quadratic_drag_actual","quadratic_drag_sp"
+              "linear_drag_sp","linear_drag_sp_su","quadratic_drag_actual","quadratic_drag_sp"
           ]
           train=data["baseline_turn"]
           report={"fit_source":"baseline_turn_only","models":{},"ratios_vs_linear":{}}
