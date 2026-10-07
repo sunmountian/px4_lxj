@@ -189,6 +189,19 @@ void SensorAttackDetector::ingestActuator()
 	ActuatorEvent event{};
 	bool updated = false;
 	bool valid = false;
+	const bool quadratic_map = _param_sad_map_mode.get() == 1;
+	const float idle_offset = fmaxf(_param_sad_map_idle.get(), 0.f);
+
+	auto mapped_motor_command = [quadratic_map, idle_offset](float command) {
+		const float normalized = math::constrain(command, 0.f, 1.f);
+
+		if (!quadratic_map) {
+			return normalized;
+		}
+
+		const float shifted = normalized + idle_offset;
+		return shifted * shifted;
+	};
 
 	if (_param_sad_act_src.get() == sensor_attack_status_s::ACTUATOR_MOTORS) {
 		actuator_motors_s motors{};
@@ -205,7 +218,7 @@ void SensorAttackDetector::ingestActuator()
 					break;
 				}
 
-				thrust_indicator += fmaxf(motors.control[i], 0.f);
+				thrust_indicator += mapped_motor_command(fmaxf(motors.control[i], 0.f));
 			}
 
 			event.thrust_indicator = thrust_indicator;
@@ -228,7 +241,7 @@ void SensorAttackDetector::ingestActuator()
 
 				const float normalized = (outputs.output[i] - PWM_DEFAULT_MIN) /
 							 (PWM_DEFAULT_MAX - PWM_DEFAULT_MIN);
-				thrust_indicator += math::constrain(normalized, 0.f, 1.f);
+				thrust_indicator += mapped_motor_command(normalized);
 			}
 
 			event.thrust_indicator = thrust_indicator;
