@@ -508,6 +508,7 @@ void SensorAttackDetector::aggregateAlignedImu(const PendingImuEvent &imu, const
 
 	_imu_bin.last_timestamp = imu.timestamp;
 	_imu_bin.total_dt_s += imu.dt_s;
+	_imu_bin.thrust_indicator_dt += thrust_indicator * imu.dt_s;
 
 	for (size_t axis = 0; axis < 2; ++axis) {
 		_imu_bin.measured_delta_velocity[axis] += delta_velocity_ned(axis);
@@ -525,6 +526,7 @@ void SensorAttackDetector::flushImuBin()
 		ImuEvent event{};
 		event.timestamp = _imu_bin.last_timestamp;
 		event.dt_s = _imu_bin.total_dt_s;
+		event.thrust_indicator = _imu_bin.thrust_indicator_dt / _imu_bin.total_dt_s;
 
 		for (size_t axis = 0; axis < 2; ++axis) {
 			event.acceleration_measured[axis] = _imu_bin.measured_delta_velocity[axis] / _imu_bin.total_dt_s;
