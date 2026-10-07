@@ -26,6 +26,10 @@ except ImportError as exc:
 FROZEN_PARAMETERS = (
     "SAD_ACT_SRC",
     "SAD_THR_GAIN",
+    "SAD_THR_MAP",
+    "SAD_DRAG_K",
+    "SAD_DRAG_MOD",
+    "SAD_DYN_LAG",
     "SAD_REG",
     "SAD_AS_MU",
     "SAD_AD_MU",
