@@ -198,6 +198,12 @@ jobs:
                       "p95_ratio":cur["p95_mag"]/base["p95_mag"],
                   }
 
+          report["per_flight_linear_drag_sp_su"]={}
+          for case,d in sorted(data.items()):
+              X,y,names=design(d,"linear_drag_sp_su")
+              coef,*_=np.linalg.lstsq(X,y,rcond=None)
+              report["per_flight_linear_drag_sp_su"][case]=dict(zip(names,map(float,coef)))
+
           (root/"reanalysis.json").write_text(json.dumps(report,indent=2)+"\n")
           print(json.dumps(report,indent=2))
           PY
