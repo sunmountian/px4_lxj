@@ -61,7 +61,7 @@ def parse_args():
     parser.add_argument("--attack-mask", type=int, choices=range(1, 8), default=7)
     parser.add_argument("--normal-scale-mean", type=float, default=0.0)
     parser.add_argument("--normal-scale-sd", type=float, default=100.0)
-    parser.add_argument("--normal-dynamic-mean", type=float, default=0.0)
+    parser.add_argument("--normal-dynamic-mean", type=float, default=0.0)\n    parser.add_argument("--dynamic-lag", type=float, default=0.2)
     parser.add_argument("--normal-dynamic-sd", type=float, default=100.0)
     parser.add_argument("--pva-north", type=float, default=100.0)
     parser.add_argument("--pva-east", type=float, default=0.0)
@@ -394,7 +394,7 @@ def apply_detector_parameters(process, args):
         "SAD_ATK_MASK": args.attack_mask,
         "SAD_AS_MU": args.normal_scale_mean,
         "SAD_AS_SD": args.normal_scale_sd,
-        "SAD_AD_MU": args.normal_dynamic_mean,
+        "SAD_AD_MU": args.normal_dynamic_mean,\n        "SAD_DYN_LAG": args.dynamic_lag,
         "SAD_AD_SD": args.normal_dynamic_sd,
         "SAD_GLRT_MU": args.glrt_mean,
         "SAD_GLRT_SD": args.glrt_sd,
