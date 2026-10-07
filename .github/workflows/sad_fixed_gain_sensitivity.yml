@@ -1,0 +1,84 @@
+name: Sensor Attack Detector Fixed Gain Sensitivity
+
+on:
+  push:
+    branches:
+      - sad-v2-fixed-model
+    paths:
+      - '.github/workflows/sad_fixed_gain_sensitivity.yml'
+
+jobs:
+  gain-sensitivity:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Prepare environment
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+
+      - name: Run frozen-detector gain sensitivity
+        run: |
+          set -eux
+          OUT=build/sad_fixed_gain
+          mkdir -p "$OUT"
+
+          run_pair () {
+            LABEL="$1"; GAIN="$2"
+
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py               --scenario turn --speed 1.3 --turn-duration 8               --straight-before 10 --straight-after 14               --thr-gain "$GAIN"               --normal-scale-mean -0.33720698952674866 --normal-scale-sd 0.02               --normal-dynamic-mean 0.42821773886680603 --normal-dynamic-sd 0.05               --weight-acceleration 142.17990926253765               --weight-velocity 71.20519081577794               --weight-position 50.66817247677383               --glrt-mean 4.309805243626817               --glrt-sd 6.958476444883066               --threshold 43.18242814116727
+            TURN=$(find build/sad_v2_smoke -maxdepth 2 -path '*/turn_*/result.json' -type f | sort | tail -n 1)
+            cp "$TURN" "$OUT/${LABEL}_turn.json"
+
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py               --scenario pva-hover --pva-north 100 --pva-east 0               --pva-ramp 20 --pva-observation 10               --thr-gain "$GAIN"               --normal-scale-mean -0.33720698952674866 --normal-scale-sd 0.02               --normal-dynamic-mean 0.42821773886680603 --normal-dynamic-sd 0.05               --weight-acceleration 142.17990926253765               --weight-velocity 71.20519081577794               --weight-position 50.66817247677383               --glrt-mean 4.309805243626817               --glrt-sd 6.958476444883066               --threshold 43.18242814116727
+            ATTACK=$(find build/sad_v2_smoke -maxdepth 2 -path '*/pva-hover_*/result.json' -type f | sort | tail -n 1)
+            cp "$ATTACK" "$OUT/${LABEL}_attack.json"
+          }
+
+          run_pair gain_090 3.124070982
+          run_pair gain_095 3.297630481
+          run_pair gain_105 3.644749479
+          run_pair gain_110 3.818308978
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path("build/sad_fixed_gain")
+          rows=[]
+          for label in ("gain_090","gain_095","gain_105","gain_110"):
+              t=json.load(open(root/f"{label}_turn.json"))
+              a=json.load(open(root/f"{label}_attack.json"))
+              td=t["detector"]; ad=a["detector"]
+              rows.append({
+                  "label":label,
+                  "thr_gain":t["parameters"]["SAD_THR_GAIN"],
+                  "turn_alert_samples":td.get("alert_samples"),
+                  "turn_glrt_mean":td.get("glrt_mean"),
+                  "turn_glrt_max":td.get("glrt_max"),
+                  "attack_pre_alerts":ad.get("pre_attack_alert_count"),
+                  "attack_post_alerts":ad.get("post_attack_alert_count"),
+                  "attack_delay_s":ad.get("first_alert_delay_s"),
+                  "attack_post_glrt_mean":ad.get("post_attack_glrt_mean"),
+                  "attack_post_glrt_max":ad.get("post_attack_glrt_max"),
+              })
+          (root/"summary.json").write_text(json.dumps(rows,indent=2)+"\n")
+          print(json.dumps(rows,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sad-fixed-gain-sensitivity
+          path: build/sad_fixed_gain
+          retention-days: 5
