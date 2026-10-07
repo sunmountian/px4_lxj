@@ -1,0 +1,211 @@
+name: Sensor Attack Detector Actuator Mapping Fit
+
+on:
+  push:
+    branches:
+      - sad-v2-fixed-model
+    paths:
+      - '.github/workflows/sad_actuator_mapping_fit.yml'
+
+jobs:
+  mapping-fit:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Prepare environment
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+
+      - name: Generate nominal ULogs
+        run: |
+          set -eux
+          OUT=build/sad_mapping_fit
+          mkdir -p "$OUT"
+          COMMON="--normal-scale-mean -0.33720698952674866 --normal-scale-sd 0.02 --normal-dynamic-mean 0.42821773886680603 --normal-dynamic-sd 0.05 --weight-acceleration 142.17990926253765 --weight-velocity 71.20519081577794 --weight-position 50.66817247677383 --glrt-mean 4.309805243626817 --glrt-sd 6.958476444883066 --threshold 43.18242814116727"
+
+          run_case () {
+            LABEL="$1"; shift
+            BEFORE=$(mktemp)
+            AFTER=$(mktemp)
+            find build/sad_v2_smoke -maxdepth 2 -name result.json -type f 2>/dev/null | sort > "$BEFORE" || true
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py "$@" $COMMON
+            find build/sad_v2_smoke -maxdepth 2 -name result.json -type f | sort > "$AFTER"
+            RESULT=$(comm -13 "$BEFORE" "$AFTER" | tail -n 1)
+            test -n "$RESULT"
+            cp "$RESULT" "$OUT/${LABEL}.json"
+            ULOG=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ulog"])' "$RESULT")
+            cp "$ULOG" "$OUT/${LABEL}.ulg"
+            rm -f "$BEFORE" "$AFTER"
+          }
+
+          run_case baseline_turn --scenario turn --speed 1.3 --turn-duration 8 --straight-before 10 --straight-after 14
+          run_case accel_reverse --scenario maneuver --maneuver accel --speed 2.2
+          run_case slalom --scenario maneuver --maneuver slalom --speed 1.8
+          run_case hard_turn --scenario maneuver --maneuver hard-turn --speed 2.2
+
+      - name: Compare linear and quadratic actuator maps
+        run: |
+          python3 - <<'PY'
+          import json, math
+          from pathlib import Path
+          import numpy as np
+          from pyulog import ULog
+
+          root=Path("build/sad_mapping_fit")
+
+          def ds(ulog,name):
+              xs=[x for x in ulog.data_list if x.name==name]
+              if len(xs)!=1:
+                  raise RuntimeError(f"{name}: {len(xs)} instances")
+              return xs[0].data
+
+          def prev(ts, vals, target):
+              idx=np.searchsorted(ts,target,side="right")-1
+              idx=np.clip(idx,0,len(ts)-1)
+              return vals[idx]
+
+          def interp_cols(ts, cols, target):
+              return np.column_stack([np.interp(target,ts,c) for c in cols])
+
+          def quat_to_rcol2(q):
+              # q = [w,x,y,z], third body axis expressed in NED.
+              w,x,y,z=q.T
+              return np.column_stack([
+                  2*(x*z+w*y),
+                  2*(y*z-w*x),
+                  1-2*(x*x+y*y),
+              ])
+
+          def load(path):
+              u=ULog(str(path),None,disable_str_exceptions=True)
+              act=ds(u,"actuator_outputs")
+              att=ds(u,"vehicle_attitude")
+              imu=ds(u,"vehicle_imu")
+              land=ds(u,"vehicle_land_detected")
+
+              ti=np.asarray(imu["timestamp_sample"],dtype=np.uint64)
+              dt=np.asarray(imu["delta_velocity_dt"],dtype=float)*1e-6
+              dv=np.column_stack([np.asarray(imu[f"delta_velocity[{i}]"],dtype=float) for i in range(3)])
+
+              ta=np.asarray(att["timestamp_sample"],dtype=np.uint64)
+              qcols=[np.asarray(att[f"q[{i}]"],dtype=float) for i in range(4)]
+              q=interp_cols(ta,qcols,ti)
+              qnorm=np.linalg.norm(q,axis=1)
+              q=q/np.maximum(qnorm[:,None],1e-12)
+              rcol2=quat_to_rcol2(q)
+
+              # Full DCM action on measured body delta-v.
+              w,x,y,z=q.T
+              R=np.empty((len(q),3,3))
+              R[:,0,0]=1-2*(y*y+z*z); R[:,0,1]=2*(x*y-w*z); R[:,0,2]=2*(x*z+w*y)
+              R[:,1,0]=2*(x*y+w*z); R[:,1,1]=1-2*(x*x+z*z); R[:,1,2]=2*(y*z-w*x)
+              R[:,2,0]=2*(x*z-w*y); R[:,2,1]=2*(y*z+w*x); R[:,2,2]=1-2*(x*x+y*y)
+              ameas=np.einsum("nij,nj->ni",R,dv)/np.maximum(dt[:,None],1e-9)
+
+              to=np.asarray(act["timestamp"],dtype=np.uint64)
+              outs=np.column_stack([np.asarray(act[f"output[{i}]"],dtype=float) for i in range(4)])
+              outs_at=prev(to,outs,ti)
+              un=np.clip((outs_at-1000.0)/1000.0,0.0,1.0)
+              s1=np.sum(un,axis=1)
+              s2=np.sum(un*un,axis=1)
+
+              # Positive scalar maps to thrust along -body z.
+              phi1=-rcol2[:,:2]*s1[:,None]
+              phi2=-rcol2[:,:2]*s2[:,None]
+
+              lag_us=200000
+              tlag=ti.astype(np.int64)-lag_us
+              valid_lag=tlag>=int(ti[0])
+              dphi1=np.zeros_like(phi1)
+              dphi2=np.zeros_like(phi2)
+              for ax in range(2):
+                  dphi1[:,ax]=phi1[:,ax]-np.interp(tlag,ti,phi1[:,ax])
+                  dphi2[:,ax]=phi2[:,ax]-np.interp(tlag,ti,phi2[:,ax])
+
+              tl=np.asarray(land["timestamp"],dtype=np.uint64)
+              landed=prev(tl,np.asarray(land["landed"],dtype=bool),ti)
+              finite=(~landed)&valid_lag&(dt>1e-5)&(dt<0.05)&np.all(np.isfinite(ameas[:,:2]),axis=1)
+              finite&=np.all(np.isfinite(phi1),axis=1)&np.all(np.isfinite(phi2),axis=1)
+              # Remove nearly vertical takeoff/landing portions that carry little horizontal identification.
+              finite&=(np.linalg.norm(rcol2[:,:2],axis=1)>0.03)
+              return {
+                  "t":ti[finite],
+                  "y":ameas[finite,:2],
+                  "phi1":phi1[finite],
+                  "phi2":phi2[finite],
+                  "dphi1":dphi1[finite],
+                  "dphi2":dphi2[finite],
+              }
+
+          data={p.stem:load(p) for p in root.glob("*.ulg")}
+
+          def fit_map(d,kind):
+              phi=d["phi1" if kind=="linear" else "phi2"]
+              dphi=d["dphi1" if kind=="linear" else "dphi2"]
+              n=len(phi)
+              # stacked N/E, per-axis bias + shared steady and dynamic gains
+              X=np.zeros((2*n,4)); y=np.zeros(2*n)
+              X[:n,0]=1; X[n:,1]=1
+              X[:n,2]=phi[:,0]; X[n:,2]=phi[:,1]
+              X[:n,3]=dphi[:,0]; X[n:,3]=dphi[:,1]
+              y[:n]=d["y"][:,0]; y[n:]=d["y"][:,1]
+              coef,*_=np.linalg.lstsq(X,y,rcond=None)
+              return coef
+
+          def eval_map(d,kind,coef):
+              phi=d["phi1" if kind=="linear" else "phi2"]
+              dphi=d["dphi1" if kind=="linear" else "dphi2"]
+              pred=np.column_stack([
+                  coef[0]+coef[2]*phi[:,0]+coef[3]*dphi[:,0],
+                  coef[1]+coef[2]*phi[:,1]+coef[3]*dphi[:,1],
+              ])
+              err=d["y"]-pred
+              mag=np.linalg.norm(err,axis=1)
+              return {
+                  "samples":int(len(mag)),
+                  "rmse_ne":float(np.sqrt(np.mean(np.sum(err*err,axis=1)))),
+                  "mae_mag":float(np.mean(mag)),
+                  "p95_mag":float(np.percentile(mag,95)),
+              }
+
+          # Fit only on ordinary turn; freeze coefficients on the richer maneuvers.
+          train=data["baseline_turn"]
+          coef_l=fit_map(train,"linear")
+          coef_q=fit_map(train,"quadratic")
+          report={
+              "fit_source":"baseline_turn_only",
+              "linear_coefficients":{"bias_n":float(coef_l[0]),"bias_e":float(coef_l[1]),"steady_gain":float(coef_l[2]),"dynamic_gain":float(coef_l[3])},
+              "quadratic_coefficients":{"bias_n":float(coef_q[0]),"bias_e":float(coef_q[1]),"steady_gain":float(coef_q[2]),"dynamic_gain":float(coef_q[3])},
+              "evaluation":{}
+          }
+          for name,d in sorted(data.items()):
+              le=eval_map(d,"linear",coef_l)
+              qe=eval_map(d,"quadratic",coef_q)
+              report["evaluation"][name]={
+                  "linear":le,
+                  "quadratic":qe,
+                  "quadratic_rmse_ratio":qe["rmse_ne"]/max(le["rmse_ne"],1e-12),
+                  "quadratic_p95_ratio":qe["p95_mag"]/max(le["p95_mag"],1e-12),
+              }
+          (root/"mapping_fit.json").write_text(json.dumps(report,indent=2)+"\n")
+          print(json.dumps(report,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sad-actuator-mapping-fit
+          path: build/sad_mapping_fit
+          retention-days: 5
