@@ -1,0 +1,191 @@
+name: Sensor Attack Detector Fixed Stress Matrix
+
+on:
+  push:
+    branches:
+      - sad-v2-fixed-model
+    paths:
+      - '.github/workflows/sad_v2_stress_matrix.yml'
+      - 'Tools/sensor_attack_detector/run_v2_smoke.py'
+
+concurrency:
+  group: sad-v2-fixed-stress-matrix
+  cancel-in-progress: true
+
+jobs:
+  stress:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Prepare environment
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+
+      - name: Run richer nominal maneuvers
+        run: |
+          set -eux
+          OUT=build/sad_v2_stress
+          rm -rf build/sad_v2_smoke "$OUT"
+          mkdir -p "$OUT/nominal"
+
+          COMMON="--normal-scale-mean -0.33720698952674866             --normal-scale-sd 0.02             --normal-dynamic-mean 0.42821773886680603             --normal-dynamic-sd 0.05             --weight-acceleration 142.17990926253765             --weight-velocity 71.20519081577794             --weight-position 50.66817247677383             --glrt-mean 4.309805243626817             --glrt-sd 6.958476444883066             --threshold 43.18242814116727"
+
+          run_nominal () {
+            LABEL="$1"; shift
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py "$@" $COMMON
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -name result.json -type f | sort | tail -n 1)
+            cp "$RESULT" "$OUT/nominal/${LABEL}.json"
+          }
+
+          run_nominal accel_reverse --scenario maneuver --maneuver accel --speed 2.2
+          run_nominal slalom --scenario maneuver --maneuver slalom --speed 1.8
+          run_nominal hard_turn --scenario maneuver --maneuver hard-turn --speed 2.2
+          run_nominal turn_2s --scenario turn --speed 2.0 --turn-duration 2             --straight-before 10 --straight-after 14
+
+      - name: Run fixed-coefficient mass robustness
+        run: |
+          set -eux
+          OUT=build/sad_v2_stress
+          mkdir -p "$OUT/mass"
+          MODEL=$(find Tools/sitl_gazebo/models -path '*/iris/iris.sdf' -type f | head -n 1)
+          test -n "$MODEL"
+          cp "$MODEL" /tmp/iris_base.sdf
+          echo "iris_model=$MODEL"
+
+          COMMON="--normal-scale-mean -0.33720698952674866             --normal-scale-sd 0.02             --normal-dynamic-mean 0.42821773886680603             --normal-dynamic-sd 0.05             --weight-acceleration 142.17990926253765             --weight-velocity 71.20519081577794             --weight-position 50.66817247677383             --glrt-mean 4.309805243626817             --glrt-sd 6.958476444883066             --threshold 43.18242814116727"
+
+          patch_mass () {
+            FACTOR="$1"
+            cp /tmp/iris_base.sdf "$MODEL"
+            python3 - "$MODEL" "$FACTOR" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          path=sys.argv[1]
+          factor=float(sys.argv[2])
+          tree=ET.parse(path)
+          root=tree.getroot()
+          target=None
+          for link in root.iter("link"):
+              if link.attrib.get("name") in ("base_link", "base_link_inertia"):
+                  mass=link.find("./inertial/mass")
+                  if mass is not None:
+                      target=mass
+                      break
+          if target is None:
+              raise SystemExit("base-link mass element not found")
+          original=float(target.text)
+          target.text=f"{original*factor:.9f}"
+          tree.write(path, encoding="utf-8", xml_declaration=True)
+          print(f"mass_factor={factor} base_mass={original} patched_mass={target.text}")
+          PY
+          }
+
+          run_mass_pair () {
+            LABEL="$1"; FACTOR="$2"
+            patch_mass "$FACTOR"
+
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py               --scenario turn --speed 1.3 --turn-duration 8               --straight-before 10 --straight-after 14 $COMMON
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -path '*/turn_*/result.json' -type f | sort | tail -n 1)
+            cp "$RESULT" "$OUT/mass/${LABEL}_turn.json"
+
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py               --scenario pva-hover --pva-north 100 --pva-east 0               --pva-ramp 20 --pva-observation 10 $COMMON
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -path '*/pva-hover_*/result.json' -type f | sort | tail -n 1)
+            cp "$RESULT" "$OUT/mass/${LABEL}_attack.json"
+          }
+
+          run_mass_pair mass_085 0.85
+          run_mass_pair mass_100 1.00
+          run_mass_pair mass_115 1.15
+          cp /tmp/iris_base.sdf "$MODEL"
+
+      - name: Run slow-attack boundary
+        run: |
+          set -eux
+          OUT=build/sad_v2_stress
+          mkdir -p "$OUT/slow"
+
+          COMMON="--normal-scale-mean -0.33720698952674866             --normal-scale-sd 0.02             --normal-dynamic-mean 0.42821773886680603             --normal-dynamic-sd 0.05             --weight-acceleration 142.17990926253765             --weight-velocity 71.20519081577794             --weight-position 50.66817247677383             --glrt-mean 4.309805243626817             --glrt-sd 6.958476444883066             --threshold 43.18242814116727"
+
+          run_slow () {
+            LABEL="$1"; RAMP="$2"; OBS="$3"
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py               --scenario pva-hover --pva-north 100 --pva-east 0               --pva-ramp "$RAMP" --pva-observation "$OBS" $COMMON
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -path '*/pva-hover_*/result.json' -type f | sort | tail -n 1)
+            cp "$RESULT" "$OUT/slow/${LABEL}.json"
+          }
+
+          run_slow north_100_50 50 18
+          run_slow north_100_60 60 22
+
+      - name: Summarize stress matrix
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root=Path("build/sad_v2_stress")
+          summary={"nominal":[],"mass":[],"slow":[]}
+
+          for p in sorted((root/"nominal").glob("*.json")):
+              r=json.load(open(p)); d=r["detector"]
+              summary["nominal"].append({
+                  "case":p.stem,
+                  "alerts":d.get("alert_samples"),
+                  "glrt_mean":d.get("glrt_mean"),
+                  "glrt_max":d.get("glrt_max"),
+                  "cusum_max":d.get("cusum_max"),
+                  "threshold":d.get("threshold_value"),
+                  "cusum_margin":d.get("cusum_margin"),
+              })
+
+          for p in sorted((root/"mass").glob("*.json")):
+              r=json.load(open(p)); d=r["detector"]
+              summary["mass"].append({
+                  "case":p.stem,
+                  "alerts":d.get("alert_samples"),
+                  "pre_attack_alerts":d.get("pre_attack_alert_count"),
+                  "post_attack_alerts":d.get("post_attack_alert_count"),
+                  "delay_s":d.get("first_alert_delay_s"),
+                  "glrt_mean":d.get("glrt_mean"),
+                  "glrt_max":d.get("glrt_max"),
+                  "cusum_max":d.get("cusum_max"),
+                  "cusum_margin":d.get("cusum_margin"),
+                  "post_attack_glrt_mean":d.get("post_attack_glrt_mean"),
+              })
+
+          for p in sorted((root/"slow").glob("*.json")):
+              r=json.load(open(p)); d=r["detector"]
+              summary["slow"].append({
+                  "case":p.stem,
+                  "pre_attack_alerts":d.get("pre_attack_alert_count"),
+                  "post_attack_alerts":d.get("post_attack_alert_count"),
+                  "delay_s":d.get("first_alert_delay_s"),
+                  "post_attack_glrt_mean":d.get("post_attack_glrt_mean"),
+                  "post_attack_glrt_max":d.get("post_attack_glrt_max"),
+                  "cusum_max":d.get("cusum_max"),
+              })
+
+          root.mkdir(parents=True,exist_ok=True)
+          (root/"summary.json").write_text(json.dumps(summary,indent=2,sort_keys=True)+"\n")
+          print(json.dumps(summary,indent=2,sort_keys=True))
+          PY
+
+      - name: Upload stress outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sad-v2-fixed-stress-matrix
+          path: build/sad_v2_stress
+          retention-days: 5
