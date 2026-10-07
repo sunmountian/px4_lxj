@@ -1,0 +1,131 @@
+name: Sensor Attack Detector Maneuver Diagnostics
+
+on:
+  push:
+    branches:
+      - sad-v2-fixed-model
+    paths:
+      - '.github/workflows/sad_fixed_maneuver_diagnostics.yml'
+
+jobs:
+  diagnostics:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Prepare environment
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+
+      - name: Run diagnostic nominal maneuvers
+        run: |
+          set -eux
+          OUT=build/sad_maneuver_diag
+          mkdir -p "$OUT"
+          COMMON="--normal-scale-mean -0.33720698952674866 --normal-scale-sd 0.02 --normal-dynamic-mean 0.42821773886680603 --normal-dynamic-sd 0.05 --weight-acceleration 142.17990926253765 --weight-velocity 71.20519081577794 --weight-position 50.66817247677383 --glrt-mean 4.309805243626817 --glrt-sd 6.958476444883066 --threshold 43.18242814116727 --cusum-drift 0.5 --consecutive 3"
+
+          run_case () {
+            LABEL="$1"; shift
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py "$@" $COMMON
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -name result.json -type f | sort | tail -n 1)
+            cp "$RESULT" "$OUT/${LABEL}.json"
+          }
+
+          run_case baseline_turn --scenario turn --speed 1.3 --turn-duration 8 --straight-before 10 --straight-after 14
+          run_case accel_reverse --scenario maneuver --maneuver accel --speed 2.2
+          run_case slalom --scenario maneuver --maneuver slalom --speed 1.8
+          run_case hard_turn --scenario maneuver --maneuver hard-turn --speed 2.2
+
+      - name: Decompose residual orders
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          import numpy as np
+          from pyulog import ULog
+
+          root=Path("build/sad_maneuver_diag")
+          rows=[]
+
+          for p in sorted(root.glob("*.json")):
+              if p.name == "summary.json":
+                  continue
+              meta=json.load(open(p))
+              u=ULog(meta["ulog"],None,disable_str_exceptions=True)
+              ds=[x for x in u.data_list if x.name=="sensor_attack_status"]
+              if len(ds)!=1:
+                  raise RuntimeError(f"{p}: sensor_attack_status instances={len(ds)}")
+              d=ds[0].data
+              valid=np.asarray(d["valid"],dtype=bool)
+              q=np.asarray(d["data_quality_flags"],dtype=np.uint32)
+              glrt=np.asarray(d["glrt_score"],dtype=float)
+              use=valid & np.isfinite(glrt)
+              clean=use & (q==0)
+              mask=clean if np.any(clean) else use
+              g=glrt[mask]
+              threshold=np.percentile(g,90) if g.size else np.nan
+              high=mask & (glrt>=threshold)
+
+              row={
+                  "case":p.stem,
+                  "alert_samples":meta["detector"].get("alert_samples"),
+                  "cusum_max":meta["detector"].get("cusum_max"),
+                  "glrt_mean":float(np.mean(g)),
+                  "glrt_max":float(np.max(g)),
+              }
+
+              for axis in ("n","e"):
+                  x=np.asarray(d[f"glrt_score_{axis}"],dtype=float)
+                  row[f"glrt_{axis}_mean"]=float(np.mean(x[mask]))
+                  row[f"glrt_{axis}_max"]=float(np.max(x[mask]))
+
+              for order in ("accel","velocity","position"):
+                  pair=np.column_stack([
+                      np.asarray(d[f"normal_rms_{order}_n"],dtype=float),
+                      np.asarray(d[f"normal_rms_{order}_e"],dtype=float),
+                  ])
+                  mag=np.sqrt(np.mean(pair*pair,axis=1))
+                  finite=mask & np.isfinite(mag)
+                  high_finite=high & np.isfinite(mag)
+                  row[f"{order}_rms_mean"]=float(np.mean(mag[finite]))
+                  row[f"{order}_rms_p95"]=float(np.percentile(mag[finite],95))
+                  row[f"{order}_rms_high_glrt_mean"]=float(np.mean(mag[high_finite]))
+
+                  if np.count_nonzero(finite)>2:
+                      row[f"{order}_glrt_corr"]=float(np.corrcoef(mag[finite],glrt[finite])[0,1])
+                  else:
+                      row[f"{order}_glrt_corr"]=None
+
+              a_meas=np.column_stack([
+                  np.asarray(d["accel_meas_n"],dtype=float),
+                  np.asarray(d["accel_meas_e"],dtype=float),
+              ])
+              a_act=np.column_stack([
+                  np.asarray(d["accel_actuator_n"],dtype=float),
+                  np.asarray(d["accel_actuator_e"],dtype=float),
+              ])
+              row["accel_meas_mag_mean"]=float(np.mean(np.linalg.norm(a_meas[mask],axis=1)))
+              row["accel_actuator_mag_mean"]=float(np.mean(np.linalg.norm(a_act[mask],axis=1)))
+              rows.append(row)
+
+          (root/"summary.json").write_text(json.dumps(rows,indent=2,sort_keys=True)+"\n")
+          print(json.dumps(rows,indent=2,sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sad-fixed-maneuver-diagnostics
+          path: build/sad_maneuver_diag
+          retention-days: 5
