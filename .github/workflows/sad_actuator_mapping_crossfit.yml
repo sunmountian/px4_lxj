@@ -7,6 +7,10 @@ on:
     paths:
       - '.github/workflows/sad_actuator_mapping_crossfit.yml'
 
+concurrency:
+  group: sad-actuator-mapping-crossfit
+  cancel-in-progress: true
+
 jobs:
   crossfit:
     runs-on: ubuntu-latest
@@ -68,8 +72,8 @@ jobs:
           LAG_US=200000
 
           def ds(u,name):
-              xs=[x for x in u.data_list if x.name==name]
-              if len(xs)!=1: raise RuntimeError(f"{name}: {len(xs)} instances")
+              xs=[x for x in u.data_list if x.name==name and x.multi_id==0]
+              if len(xs)!=1: raise RuntimeError(f"{name}[0]: {len(xs)} instances")
               return xs[0].data
 
           def prev(ts,vals,target):
