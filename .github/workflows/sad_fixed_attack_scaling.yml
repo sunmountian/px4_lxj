@@ -1,0 +1,79 @@
+name: Sensor Attack Detector Attack Scaling
+
+on:
+  push:
+    branches:
+      - sad-v2-fixed-model
+    paths:
+      - '.github/workflows/sad_fixed_attack_scaling.yml'
+
+jobs:
+  attack-scaling:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Prepare environment
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+
+      - name: Run curvature-scale attack grid
+        run: |
+          set -eux
+          OUT=build/sad_attack_scaling
+          mkdir -p "$OUT"
+          COMMON="--normal-scale-mean -0.33720698952674866 --normal-scale-sd 0.02 --normal-dynamic-mean 0.42821773886680603 --normal-dynamic-sd 0.05 --weight-acceleration 142.17990926253765 --weight-velocity 71.20519081577794 --weight-position 50.66817247677383 --glrt-mean 4.309805243626817 --glrt-sd 6.958476444883066 --threshold 43.18242814116727 --cusum-drift 0.5 --consecutive 3"
+
+          run_case () {
+            LABEL="$1"; B="$2"; T="$3"; OBS="$4"
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py               --scenario pva-hover --pva-north "$B" --pva-east 0               --pva-ramp "$T" --pva-observation "$OBS" $COMMON
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -path '*/pva-hover_*/result.json' -type f | sort | tail -n 1)
+            cp "$RESULT" "$OUT/${LABEL}.json"
+          }
+
+          run_case b100_t40 100 40 20
+          run_case b25_t20 25 20 14
+          run_case b50_t30 50 30 18
+          run_case b100_t60 100 60 30
+          run_case b25_t30 25 30 18
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path("build/sad_attack_scaling")
+          rows=[]
+          for p in sorted(root.glob("*.json")):
+              r=json.load(open(p)); d=r["detector"]; a=r["attack_spec"]
+              B=abs(float(a["north_m"])); T=float(a["ramp_s"])
+              rows.append({
+                  "case":p.stem,
+                  "B_m":B,
+                  "T_s":T,
+                  "B_over_T2":B/(T*T),
+                  "pre_attack_alert_count":d.get("pre_attack_alert_count"),
+                  "post_attack_alert_count":d.get("post_attack_alert_count"),
+                  "first_alert_delay_s":d.get("first_alert_delay_s"),
+                  "post_attack_glrt_mean":d.get("post_attack_glrt_mean"),
+                  "post_attack_glrt_max":d.get("post_attack_glrt_max"),
+              })
+          (root/"summary.json").write_text(json.dumps(rows,indent=2)+"\n")
+          print(json.dumps(rows,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sad-fixed-attack-scaling
+          path: build/sad_attack_scaling
+          retention-days: 5
