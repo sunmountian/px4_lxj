@@ -1,0 +1,166 @@
+name: Sensor Attack Detector Frozen Nominal FAR Validation
+
+on:
+  push:
+    branches:
+      - sad-v2-fixed-model
+    paths:
+      - '.github/workflows/sad_thesis_nominal_far.yml'
+
+concurrency:
+  group: sad-thesis-nominal-far
+  cancel-in-progress: true
+
+jobs:
+  nominal-batch:
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [0, 1, 2, 3]
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Prepare environment
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+
+      - name: Run five independent nominal flights
+        run: |
+          set -eux
+          GROUP="${{ matrix.group }}"
+          OUT="build/sad_nominal_far/g${GROUP}"
+          rm -rf build/sad_v2_smoke "$OUT"
+          mkdir -p "$OUT"
+
+          run_case () {
+            LABEL="$1"; shift
+            MARKER=$(mktemp); touch "$MARKER"
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py "$@"
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -name result.json -type f -newer "$MARKER" | head -n 1)
+            rm -f "$MARKER"; test -n "$RESULT"
+            cp "$RESULT" "$OUT/${LABEL}.json"
+          }
+
+          case "$GROUP" in
+            0)
+              run_case g0_hover_1 --scenario hover
+              run_case g0_hover_2 --scenario hover
+              run_case g0_turn_08_6 --scenario turn --speed 0.8 --turn-duration 6 --straight-before 10 --straight-after 14
+              run_case g0_accel_18 --scenario maneuver --maneuver accel --speed 1.8
+              run_case g0_accel_20 --scenario maneuver --maneuver accel --speed 2.0
+              ;;
+            1)
+              run_case g1_hover --scenario hover
+              run_case g1_turn_10_4 --scenario turn --speed 1.0 --turn-duration 4 --straight-before 10 --straight-after 14
+              run_case g1_turn_10_8 --scenario turn --speed 1.0 --turn-duration 8 --straight-before 10 --straight-after 14
+              run_case g1_accel_19 --scenario maneuver --maneuver accel --speed 1.9
+              run_case g1_accel_21 --scenario maneuver --maneuver accel --speed 2.1
+              ;;
+            2)
+              run_case g2_turn_07_8 --scenario turn --speed 0.7 --turn-duration 8 --straight-before 10 --straight-after 14
+              run_case g2_turn_12_5 --scenario turn --speed 1.2 --turn-duration 5 --straight-before 10 --straight-after 14
+              run_case g2_turn_13_8 --scenario turn --speed 1.3 --turn-duration 8 --straight-before 10 --straight-after 14
+              run_case g2_accel_20 --scenario maneuver --maneuver accel --speed 2.0
+              run_case g2_accel_22 --scenario maneuver --maneuver accel --speed 2.2
+              ;;
+            3)
+              run_case g3_hover --scenario hover
+              run_case g3_turn_09_7 --scenario turn --speed 0.9 --turn-duration 7 --straight-before 10 --straight-after 14
+              run_case g3_turn_115_5 --scenario turn --speed 1.15 --turn-duration 5 --straight-before 10 --straight-after 14
+              run_case g3_accel_19 --scenario maneuver --maneuver accel --speed 1.9
+              run_case g3_accel_22 --scenario maneuver --maneuver accel --speed 2.2
+              ;;
+          esac
+
+          python3 - "$OUT" <<'PY'
+          import json,sys
+          from pathlib import Path
+          root=Path(sys.argv[1])
+          rows=[]
+          for p in sorted(root.glob("*.json")):
+              r=json.load(open(p)); d=r["detector"]
+              rows.append({
+                  "case":p.stem,
+                  "scenario":r["scenario"],
+                  "maneuver":r.get("maneuver_spec",{}).get("maneuver"),
+                  "speed":r.get("maneuver_spec",{}).get("speed_m_s",r.get("turn_spec",{}).get("speed_m_s")),
+                  "alert_samples":d.get("alert_samples",0),
+                  "alarm_statistic":d.get("alarm_statistic"),
+                  "cusum_max":d.get("cusum_max"),
+                  "glrt_mean":d.get("glrt_mean"),
+                  "glrt_max":d.get("glrt_max"),
+              })
+          (root/"summary.json").write_text(json.dumps(rows,indent=2)+"\n")
+          print(json.dumps(rows,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nominal-batch-${{ matrix.group }}
+          path: build/sad_nominal_far/g${{ matrix.group }}
+          retention-days: 5
+
+  summarize:
+    needs: nominal-batch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nominal-batch-*
+          path: nominal
+          merge-multiple: true
+      - name: Evaluate frozen flight-level FAR
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path("nominal")
+          files=[p for p in root.glob("*.json") if p.name!="summary.json"]
+          if len(files)!=20:
+              raise SystemExit(f"expected 20 nominal result files, got {len(files)}")
+          rows=[]
+          for p in sorted(files):
+              r=json.load(open(p)); d=r["detector"]
+              rows.append({
+                  "case":p.stem,
+                  "scenario":r["scenario"],
+                  "maneuver":r.get("maneuver_spec",{}).get("maneuver"),
+                  "alert":bool(d.get("alert_samples",0)),
+                  "alert_samples":d.get("alert_samples",0),
+                  "alarm_statistic":d.get("alarm_statistic"),
+                  "cusum_max":d.get("cusum_max"),
+                  "glrt_mean":d.get("glrt_mean"),
+                  "glrt_max":d.get("glrt_max"),
+              })
+          alerts=sum(r["alert"] for r in rows)
+          summary={
+              "flight_count":len(rows),
+              "alert_flights":alerts,
+              "empirical_flight_false_alarm_rate":alerts/len(rows),
+              "target_flight_false_alarm_rate":0.05,
+              "threshold":56.313146192854525,
+              "rows":rows,
+          }
+          Path("nominal_far_summary.json").write_text(json.dumps(summary,indent=2)+"\n")
+          print(json.dumps(summary,indent=2))
+          if alerts>1:
+              raise SystemExit(f"frozen threshold exceeds 5% target: {alerts}/20 normal flights alerted")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sad-thesis-nominal-far
+          path: nominal_far_summary.json
+          retention-days: 5
