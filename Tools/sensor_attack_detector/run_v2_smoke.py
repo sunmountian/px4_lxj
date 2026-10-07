@@ -42,7 +42,8 @@ VELOCITY_TYPE_MASK = (
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--scenario", choices=("turn", "pva-hover"), required=True)
+    parser.add_argument("--scenario", choices=("turn", "maneuver", "pva-hover"), required=True)
+    parser.add_argument("--maneuver", choices=("accel", "slalom", "hard-turn"), default="slalom")
     parser.add_argument("--speed", type=float, default=1.3)
     parser.add_argument("--turn-duration", type=float, default=6.0)
     parser.add_argument("--straight-before", type=float, default=12.0)
@@ -574,6 +575,86 @@ def run_turn(master, args):
     return {"turn_start_wall": turn_start_wall, "turn_end_wall": turn_end_wall}
 
 
+
+def run_maneuver(master, args):
+    rate = args.setpoint_rate
+    speed = args.speed
+
+    send_velocity_setpoint(master, 0.0, 0.0)
+
+    for _ in range(int(rate)):
+        send_velocity_setpoint(master, 0.0, 0.0)
+        time.sleep(1.0 / rate)
+
+    set_px4_mode(
+        master,
+        "OFFBOARD",
+        keepalive=lambda: send_velocity_setpoint(master, 0.0, 0.0),
+    )
+    start_wall = time.time()
+
+    if args.maneuver == "accel":
+        peak = max(1.8, speed)
+
+        def velocity_profile(elapsed):
+            if elapsed < 4.0:
+                return peak * smootherstep(elapsed / 4.0), 0.0
+            if elapsed < 8.0:
+                return peak, 0.0
+            if elapsed < 12.0:
+                return peak * (1.0 - smootherstep((elapsed - 8.0) / 4.0)), 0.0
+            if elapsed < 16.0:
+                return -0.8 * peak * smootherstep((elapsed - 12.0) / 4.0), 0.0
+            if elapsed < 20.0:
+                return -0.8 * peak, 0.0
+            return -0.8 * peak * (1.0 - smootherstep((elapsed - 20.0) / 4.0)), 0.0
+
+        duration = 24.0
+
+    elif args.maneuver == "slalom":
+        travel_speed = max(1.5, speed)
+        heading_amplitude = math.radians(60.0)
+        period = 8.0
+
+        def velocity_profile(elapsed):
+            angle = heading_amplitude * math.sin(2.0 * math.pi * elapsed / period)
+            return travel_speed * math.cos(angle), travel_speed * math.sin(angle)
+
+        duration = 32.0
+
+    else:
+        travel_speed = max(2.0, speed)
+
+        def velocity_profile(elapsed):
+            if elapsed < 8.0:
+                angle = 0.0
+            elif elapsed < 10.0:
+                angle = 0.5 * math.pi * smootherstep((elapsed - 8.0) / 2.0)
+            elif elapsed < 16.0:
+                angle = 0.5 * math.pi
+            elif elapsed < 18.0:
+                angle = 0.5 * math.pi * (1.0 - smootherstep((elapsed - 16.0) / 2.0))
+            else:
+                angle = 0.0
+
+            return travel_speed * math.cos(angle), travel_speed * math.sin(angle)
+
+        duration = 26.0
+
+    stream_velocity(master, velocity_profile, duration, rate)
+    stream_velocity(master, lambda _: (0.0, 0.0), 4.0, rate)
+    end_wall = time.time()
+    set_px4_mode(
+        master,
+        "LAND",
+        keepalive=lambda: send_velocity_setpoint(master, 0.0, 0.0),
+    )
+    return {
+        "maneuver_start_wall": start_wall,
+        "maneuver_end_wall": end_wall,
+        "maneuver": args.maneuver,
+    }
+
 def main():
     args = parse_args()
     RUN_ROOT.mkdir(parents=True, exist_ok=True)
@@ -650,6 +731,9 @@ def main():
             if args.scenario == "turn":
                 event_times.update(run_turn(master, args))
 
+            elif args.scenario == "maneuver":
+                event_times.update(run_maneuver(master, args))
+
             else:
                 # Leave an in-ULog attack-onset marker while keeping the
                 # sequential threshold effectively unchanged.
@@ -702,12 +786,17 @@ def main():
             "ramp_s": args.pva_ramp,
             "observation_s": args.pva_observation,
         }
-    else:
+    elif args.scenario == "turn":
         result["turn_spec"] = {
             "speed_m_s": args.speed,
             "turn_duration_s": args.turn_duration,
             "straight_before_s": args.straight_before,
             "straight_after_s": args.straight_after,
+        }
+    else:
+        result["maneuver_spec"] = {
+            "maneuver": args.maneuver,
+            "speed_m_s": args.speed,
         }
     metadata_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(json.dumps(result, indent=2, sort_keys=True))
