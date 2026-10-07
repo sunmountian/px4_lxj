@@ -56,7 +56,7 @@ PARAM_DEFINE_FLOAT(SAD_WARMUP, 10.f);
  * @min 0.000001
  * @group Sensor Attack Detector
  */
-PARAM_DEFINE_FLOAT(SAD_WA, 1.f);
+PARAM_DEFINE_FLOAT(SAD_WA, 311.40721173819645f);
 
 /**
  * Velocity residual weight
@@ -64,7 +64,7 @@ PARAM_DEFINE_FLOAT(SAD_WA, 1.f);
  * @min 0.000001
  * @group Sensor Attack Detector
  */
-PARAM_DEFINE_FLOAT(SAD_WV, 1.f);
+PARAM_DEFINE_FLOAT(SAD_WV, 226.9711056439403f);
 
 /**
  * Position residual weight
@@ -72,7 +72,7 @@ PARAM_DEFINE_FLOAT(SAD_WV, 1.f);
  * @min 0.000001
  * @group Sensor Attack Detector
  */
-PARAM_DEFINE_FLOAT(SAD_WP, 1.f);
+PARAM_DEFINE_FLOAT(SAD_WP, 159.00814015827592f);
 
 /**
  * Actuator source
@@ -110,15 +110,15 @@ PARAM_DEFINE_FLOAT(SAD_THR_GAIN, 3.47118998f);
 /**
  * Fixed horizontal linear-damping coefficient
  *
- * Experimental physical-reference extension. Zero preserves the legacy
- * undamped actuator propagation exactly.
+ * Lightweight physical-reference correction for horizontal aerodynamic
+ * damping. Zero recovers the undamped actuator propagation.
  *
  * @unit 1/s
  * @min 0
  * @max 2
  * @group Sensor Attack Detector
  */
-PARAM_DEFINE_FLOAT(SAD_DRAG_K, 0.f);
+PARAM_DEFINE_FLOAT(SAD_DRAG_K, 0.2f);
 
 /**
  * Modulate drag coefficient by relative actuator thrust indicator
@@ -168,7 +168,7 @@ PARAM_DEFINE_INT32(SAD_ATK_MASK, 7);
  *
  * @group Sensor Attack Detector
  */
-PARAM_DEFINE_FLOAT(SAD_AS_MU, 0.f);
+PARAM_DEFINE_FLOAT(SAD_AS_MU, -0.33720698952674866f);
 
 /**
  * Legacy V2 actuator-scale prior width
@@ -179,7 +179,7 @@ PARAM_DEFINE_FLOAT(SAD_AS_MU, 0.f);
  * @min 0.001
  * @group Sensor Attack Detector
  */
-PARAM_DEFINE_FLOAT(SAD_AS_SD, 1.f);
+PARAM_DEFINE_FLOAT(SAD_AS_SD, 0.02f);
 
 /**
  * Fixed nominal actuator-dynamic correction coefficient
@@ -189,7 +189,7 @@ PARAM_DEFINE_FLOAT(SAD_AS_SD, 1.f);
  *
  * @group Sensor Attack Detector
  */
-PARAM_DEFINE_FLOAT(SAD_AD_MU, 0.f);
+PARAM_DEFINE_FLOAT(SAD_AD_MU, 0.42821773886680603f);
 
 /**
  * Dynamic actuator-reference lag used by the fixed correction
@@ -210,7 +210,7 @@ PARAM_DEFINE_FLOAT(SAD_DYN_LAG, 0.2f);
  * @min 0.001
  * @group Sensor Attack Detector
  */
-PARAM_DEFINE_FLOAT(SAD_AD_SD, 1.f);
+PARAM_DEFINE_FLOAT(SAD_AD_SD, 0.05f);
 
 /**
  * Nominal mean of the eight-second GLRT
@@ -219,7 +219,7 @@ PARAM_DEFINE_FLOAT(SAD_AD_SD, 1.f);
  *
  * @group Sensor Attack Detector
  */
-PARAM_DEFINE_FLOAT(SAD_GLRT_MU, 3.99645138f);
+PARAM_DEFINE_FLOAT(SAD_GLRT_MU, 4.917112030075899f);
 
 /**
  * Nominal standard deviation of the eight-second GLRT
@@ -229,7 +229,7 @@ PARAM_DEFINE_FLOAT(SAD_GLRT_MU, 3.99645138f);
  * @min 0.000001
  * @group Sensor Attack Detector
  */
-PARAM_DEFINE_FLOAT(SAD_GLRT_SD, 5.98480034f);
+PARAM_DEFINE_FLOAT(SAD_GLRT_SD, 6.4710112836256135f);
 
 /**
  * CUSUM drift
@@ -247,7 +247,7 @@ PARAM_DEFINE_FLOAT(SAD_CUS_DR, 0.5f);
  * @min 0
  * @group Sensor Attack Detector
  */
-PARAM_DEFINE_FLOAT(SAD_THRESH, 60.4715042f);
+PARAM_DEFINE_FLOAT(SAD_THRESH, 56.313146192854525f);
 
 /**
  * Consecutive threshold crossings required for alert
