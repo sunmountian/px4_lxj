@@ -1,0 +1,136 @@
+name: Sensor Attack Detector Fixed Mass Robustness
+
+on:
+  push:
+    branches:
+      - sad-v2-fixed-model
+    paths:
+      - '.github/workflows/sad_fixed_mass_robustness.yml'
+
+jobs:
+  mass-robustness:
+    strategy:
+      fail-fast: false
+      matrix:
+        mass_scale: [0.90, 1.10, 1.20]
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Prepare environment and build
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+
+      - name: Perturb Iris physical mass
+        env:
+          MASS_SCALE: ${{ matrix.mass_scale }}
+        run: |
+          set -eux
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+
+          scale=float(os.environ["MASS_SCALE"])
+          candidates=list(Path("Tools/sitl_gazebo").rglob("iris.sdf"))
+          candidates += list(Path("build").rglob("iris.sdf"))
+          seen=set()
+          changed=[]
+
+          pattern=re.compile(
+              r'(<link\s+name=["\']base_link["\'][\s\S]*?<inertial>[\s\S]*?<mass>\s*)'
+              r'([0-9eE+\-.]+)(\s*</mass>)'
+          )
+
+          for path in candidates:
+              key=str(path.resolve())
+              if key in seen or not path.is_file():
+                  continue
+              seen.add(key)
+              text=path.read_text(errors="replace")
+              match=pattern.search(text)
+              if not match:
+                  continue
+              original=float(match.group(2))
+              modified=original*scale
+              text=pattern.sub(
+                  lambda m: m.group(1)+format(modified, ".12g")+m.group(3),
+                  text,
+                  count=1,
+              )
+              path.write_text(text)
+              changed.append({
+                  "path":str(path),
+                  "original_mass":original,
+                  "modified_mass":modified,
+                  "scale":scale,
+              })
+
+          if not changed:
+              raise SystemExit("could not locate a generated Iris base_link mass")
+
+          out=Path("build/sad_fixed_mass_robustness")
+          out.mkdir(parents=True,exist_ok=True)
+          (out/"mass_patch.json").write_text(json.dumps(changed,indent=2)+"\n")
+          print(json.dumps(changed,indent=2))
+          PY
+
+      - name: Run nominal turn and attack with frozen detector
+        env:
+          MASS_SCALE: ${{ matrix.mass_scale }}
+        run: |
+          set -eux
+          OUT=build/sad_fixed_mass_robustness
+          COMMON="--normal-scale-mean -0.33720698952674866 --normal-scale-sd 0.02 --normal-dynamic-mean 0.42821773886680603 --normal-dynamic-sd 0.05 --weight-acceleration 142.17990926253765 --weight-velocity 71.20519081577794 --weight-position 50.66817247677383 --glrt-mean 4.309805243626817 --glrt-sd 6.958476444883066 --threshold 43.18242814116727 --cusum-drift 0.5 --consecutive 3"
+
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py             --scenario turn --speed 1.3 --turn-duration 8             --straight-before 10 --straight-after 14 $COMMON
+          TURN=$(find build/sad_v2_smoke -maxdepth 2 -path '*/turn_*/result.json' -type f | sort | tail -n 1)
+          cp "$TURN" "$OUT/turn.json"
+
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py             --scenario pva-hover --pva-north 100 --pva-east 0             --pva-ramp 20 --pva-observation 10 $COMMON
+          ATTACK=$(find build/sad_v2_smoke -maxdepth 2 -path '*/pva-hover_*/result.json' -type f | sort | tail -n 1)
+          cp "$ATTACK" "$OUT/attack.json"
+
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path("build/sad_fixed_mass_robustness")
+          t=json.load(open(root/"turn.json"))
+          a=json.load(open(root/"attack.json"))
+          d1=t["detector"]; d2=a["detector"]
+          summary={
+              "mass_scale":float(os.environ["MASS_SCALE"]),
+              "mass_patch":json.load(open(root/"mass_patch.json")),
+              "turn":{
+                  "alert_samples":d1.get("alert_samples"),
+                  "glrt_mean":d1.get("glrt_mean"),
+                  "glrt_max":d1.get("glrt_max"),
+              },
+              "attack":{
+                  "pre_attack_alert_count":d2.get("pre_attack_alert_count"),
+                  "post_attack_alert_count":d2.get("post_attack_alert_count"),
+                  "first_alert_delay_s":d2.get("first_alert_delay_s"),
+                  "post_attack_glrt_mean":d2.get("post_attack_glrt_mean"),
+                  "post_attack_glrt_max":d2.get("post_attack_glrt_max"),
+              },
+          }
+          (root/"summary.json").write_text(json.dumps(summary,indent=2)+"\n")
+          print(json.dumps(summary,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sad-fixed-mass-${{ matrix.mass_scale }}
+          path: build/sad_fixed_mass_robustness
+          retention-days: 5
