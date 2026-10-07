@@ -48,7 +48,7 @@ jobs:
             test -n "$RESULT"
             ULOG=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ulog"])' "$RESULT")
             cp "$ULOG" "$OUT/hover/hover_${ID}.ulg"
-            printf 'hover_%s,hover,true,%s\n' "$ID" "$OUT/hover/hover_${ID}.ulg" >> "$OUT/hover_manifest.csv"
+            printf 'hover_%s,hover,true,hover/hover_%s.ulg\n' "$ID" "$ID" >> "$OUT/hover_manifest.csv"
           done
 
           python3 Tools/sensor_attack_detector/calibrate_actuator_gain.py             --manifest "$OUT/hover_manifest.csv"             --output "$OUT/square_gain.json"             --mapping square
