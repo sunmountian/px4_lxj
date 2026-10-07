@@ -54,6 +54,7 @@ def parse_args():
     parser.add_argument("--thr-gain", type=float, default=3.47118998)
     parser.add_argument("--map-mode", type=int, choices=(0, 1), default=0)
     parser.add_argument("--map-idle", type=float, default=0.0)
+    parser.add_argument("--drag-gain", type=float, default=0.0)
     parser.add_argument("--weight-acceleration", type=float, default=1.0)
     parser.add_argument("--weight-velocity", type=float, default=1.0)
     parser.add_argument("--weight-position", type=float, default=1.0)
@@ -386,6 +387,7 @@ def apply_detector_parameters(process, args):
         "SAD_THR_GAIN": args.thr_gain,
         "SAD_MAP_MODE": args.map_mode,
         "SAD_MAP_IDLE": args.map_idle,
+        "SAD_DRAG_GAIN": args.drag_gain,
         "SAD_WA": args.weight_acceleration,
         "SAD_WV": args.weight_velocity,
         "SAD_WP": args.weight_position,
