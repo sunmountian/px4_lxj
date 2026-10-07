@@ -156,6 +156,9 @@ jobs:
               elif mode=="linear_drag_sp_su":
                   cols += [st(d["phi1"]),st(d["d1"]),st(d["drag_sp_su"])]
                   names += ["steady_linear","dynamic_linear","drag_sp_su"]
+              elif mode=="linear_drag_sp_su_nodynamic":
+                  cols += [st(d["phi1"]),st(d["drag_sp_su"])]
+                  names += ["steady_linear","drag_sp_su"]
               elif mode=="quadratic_drag_actual":
                   cols += [st(d["phiq"]),st(d["dq"]),st(d["drag_actual"])]
                   names += ["steady_quad","dynamic_quad","drag_actual"]
@@ -168,7 +171,7 @@ jobs:
 
           models=[
               "linear","quadratic_idle","linear_quadratic",
-              "linear_drag_sp","linear_drag_sp_su","quadratic_drag_actual","quadratic_drag_sp"
+              "linear_drag_sp","linear_drag_sp_su","linear_drag_sp_su_nodynamic","quadratic_drag_actual","quadratic_drag_sp"
           ]
           train=data["baseline_turn"]
           report={"fit_source":"baseline_turn_only","models":{},"ratios_vs_linear":{}}
