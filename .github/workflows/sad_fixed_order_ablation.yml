@@ -37,8 +37,12 @@ jobs:
 
           run_case () {
             LABEL="$1"; WA="$2"; WV="$3"; WP="$4"; shift 4
+            MARKER=$(mktemp)
+            touch "$MARKER"
             python3 Tools/sensor_attack_detector/run_v2_smoke.py "$@"               --weight-acceleration "$WA" --weight-velocity "$WV" --weight-position "$WP" $BASE
-            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -name result.json -type f | sort | tail -n 1)
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -name result.json -type f -newer "$MARKER" | head -n 1)
+            rm -f "$MARKER"
+            test -n "$RESULT"
             cp "$RESULT" "$OUT/${LABEL}.json"
           }
 
