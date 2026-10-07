@@ -1,0 +1,96 @@
+name: Sensor Attack Detector Frozen Thesis Regression
+
+on:
+  push:
+    branches:
+      - sad-v2-fixed-model
+    paths:
+      - '.github/workflows/sad_thesis_frozen_regression.yml'
+
+concurrency:
+  group: sad-thesis-frozen-regression
+  cancel-in-progress: true
+
+jobs:
+  frozen-regression:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Prepare environment
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make tests
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+
+      - name: Run frozen default regression
+        run: |
+          set -eux
+          OUT=build/sad_thesis_frozen
+          rm -rf build/sad_v2_smoke "$OUT"
+          mkdir -p "$OUT"
+
+          run_case () {
+            LABEL="$1"; shift
+            MARKER=$(mktemp); touch "$MARKER"
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py "$@"
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -name result.json -type f -newer "$MARKER" | head -n 1)
+            rm -f "$MARKER"; test -n "$RESULT"
+            cp "$RESULT" "$OUT/${LABEL}.json"
+          }
+
+          run_case hover --scenario hover
+          run_case turn --scenario turn --speed 1.3 --turn-duration 8 --straight-before 10 --straight-after 14
+          run_case accel --scenario maneuver --maneuver accel --speed 2.2
+          run_case attack_100_20 --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 20 --pva-observation 14
+          run_case attack_100_30 --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 30 --pva-observation 16
+          run_case attack_100_40 --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 40 --pva-observation 20
+          run_case sinusoidal_100_20 --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 20 --pva-profile sinusoidal --pva-observation 14
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path("build/sad_thesis_frozen")
+          rows=[]
+          for p in sorted(root.glob("*.json")):
+              r=json.load(open(p)); d=r["detector"]
+              rows.append({
+                  "case":p.stem,
+                  "alert_samples":d.get("alert_samples"),
+                  "pre_attack_alert_count":d.get("pre_attack_alert_count"),
+                  "post_attack_alert_count":d.get("post_attack_alert_count"),
+                  "first_alert_delay_s":d.get("first_alert_delay_s"),
+                  "glrt_mean":d.get("glrt_mean"),
+                  "post_attack_glrt_mean":d.get("post_attack_glrt_mean"),
+                  "cusum_max":d.get("cusum_max"),
+                  "parameters":r.get("parameters"),
+              })
+          by={x["case"]:x for x in rows}
+          for name in ("hover","turn","accel"):
+              if by[name]["alert_samples"] not in (0,None):
+                  raise SystemExit(f"nominal false alert in {name}: {by[name]}")
+          for name in ("attack_100_20","attack_100_30","attack_100_40","sinusoidal_100_20"):
+              if not by[name]["post_attack_alert_count"]:
+                  raise SystemExit(f"attack not detected in {name}: {by[name]}")
+              if by[name]["pre_attack_alert_count"] not in (0,None):
+                  raise SystemExit(f"pre-attack false alert in {name}: {by[name]}")
+          (root/"summary.json").write_text(json.dumps(rows,indent=2)+"\n")
+          print(json.dumps(rows,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sad-thesis-frozen-regression
+          path: build/sad_thesis_frozen
+          retention-days: 5
