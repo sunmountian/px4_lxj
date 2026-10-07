@@ -184,6 +184,16 @@ PARAM_DEFINE_FLOAT(SAD_AS_SD, 1.f);
 PARAM_DEFINE_FLOAT(SAD_AD_MU, 0.f);
 
 /**
+ * Dynamic actuator-reference lag used by the fixed correction
+ *
+ * @unit s
+ * @min 0.02
+ * @max 0.5
+ * @group Sensor Attack Detector
+ */
+PARAM_DEFINE_FLOAT(SAD_DYN_LAG, 0.2f);
+
+/**
  * Legacy V2 actuator-dynamic prior width
  *
  * Retained for experiment compatibility. The fixed 7x7 detector does not
