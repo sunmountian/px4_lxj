@@ -119,6 +119,19 @@ PARAM_DEFINE_INT32(SAD_MAP_MODE, 0);
 PARAM_DEFINE_FLOAT(SAD_MAP_IDLE, 0.f);
 
 /**
+ * Trusted velocity-reference rotor-drag acceleration gain
+ *
+ * The correction is -gain * sum(normalized_motor_command) * v_perp_ref.
+ * Set to zero to disable the correction.
+ *
+ * @unit 1/s
+ * @min 0
+ * @max 2
+ * @group Sensor Attack Detector
+ */
+PARAM_DEFINE_FLOAT(SAD_DRAG_GAIN, 0.f);
+
+/**
  * Maximum accepted GPS horizontal position error
  *
  * @unit m
