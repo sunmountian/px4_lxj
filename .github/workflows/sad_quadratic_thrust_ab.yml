@@ -1,0 +1,192 @@
+name: Sensor Attack Detector Quadratic Thrust AB
+
+on:
+  push:
+    branches:
+      - sad-v2-fixed-model
+    paths:
+      - '.github/workflows/sad_quadratic_thrust_ab.yml'
+
+concurrency:
+  group: sad-quadratic-thrust-ab
+  cancel-in-progress: true
+
+jobs:
+  quadratic-ab:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Prepare environment
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+
+      - name: Collect square-map hover calibration flights
+        run: |
+          set -eux
+          OUT=build/sad_quad_ab
+          mkdir -p "$OUT/hover"
+          printf 'flight_id,scenario,nominal,ulog\n' > "$OUT/hover_manifest.csv"
+
+          for ID in 1 2 3; do
+            MARKER=$(mktemp)
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py               --scenario hover --thr-map 1 --thr-gain 1               --normal-scale-mean 0 --normal-dynamic-mean 0               --weight-acceleration 1 --weight-velocity 1 --weight-position 1               --glrt-mean 0 --glrt-sd 1 --threshold 1000000
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -name result.json -type f -newer "$MARKER" | head -n 1)
+            rm -f "$MARKER"
+            test -n "$RESULT"
+            ULOG=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ulog"])' "$RESULT")
+            cp "$ULOG" "$OUT/hover/hover_${ID}.ulg"
+            printf 'hover_%s,hover,true,%s\n' "$ID" "$OUT/hover/hover_${ID}.ulg" >> "$OUT/hover_manifest.csv"
+          done
+
+          python3 Tools/sensor_attack_detector/calibrate_actuator_gain.py             --manifest "$OUT/hover_manifest.csv"             --output "$OUT/square_gain.json"             --mapping square
+
+          python3 - <<'PY'
+          import json
+          p="build/sad_quad_ab/square_gain.json"
+          r=json.load(open(p))
+          print("square_gain",r["candidate_parameter"]["SAD_THR_GAIN"])
+          PY
+
+      - name: Fit fixed square-map normal corrections
+        run: |
+          set -eux
+          OUT=build/sad_quad_ab
+          GAIN=$(python3 -c 'import json; print(json.load(open("build/sad_quad_ab/square_gain.json"))["candidate_parameter"]["SAD_THR_GAIN"])')
+          mkdir -p "$OUT/fit"
+
+          run_fit () {
+            LABEL="$1"; shift
+            MARKER=$(mktemp)
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py "$@"               --thr-map 1 --thr-gain "$GAIN"               --normal-scale-mean 0 --normal-dynamic-mean 0               --weight-acceleration 1 --weight-velocity 1 --weight-position 1               --glrt-mean 0 --glrt-sd 1 --threshold 1000000
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -name result.json -type f -newer "$MARKER" | head -n 1)
+            rm -f "$MARKER"
+            test -n "$RESULT"
+            ULOG=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ulog"])' "$RESULT")
+            cp "$ULOG" "$OUT/fit/${LABEL}.ulg"
+          }
+
+          run_fit fit_turn   --scenario turn --speed 1.3 --turn-duration 8 --straight-before 10 --straight-after 14
+          run_fit fit_accel  --scenario maneuver --maneuver accel --speed 1.8
+          run_fit fit_slalom --scenario maneuver --maneuver slalom --speed 1.5
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          import numpy as np
+          from pyulog import ULog
+
+          rows=[]
+          lag_us=200000
+
+          for p in sorted(Path("build/sad_quad_ab/fit").glob("*.ulg")):
+              u=ULog(str(p),None,disable_str_exceptions=True)
+              ds=[x for x in u.data_list if x.name=="sensor_attack_status"]
+              if len(ds)!=1:
+                  raise RuntimeError(f"{p}: status instances={len(ds)}")
+              d=ds[0].data
+              t=np.asarray(d["timestamp_sample"],dtype=np.float64)
+              valid=np.asarray(d["valid"],dtype=bool)
+              q=np.asarray(d["data_quality_flags"],dtype=np.uint32)
+              an=np.asarray(d["accel_actuator_n"],dtype=float)
+              ae=np.asarray(d["accel_actuator_e"],dtype=float)
+              mn=np.asarray(d["accel_meas_n"],dtype=float)
+              me=np.asarray(d["accel_meas_e"],dtype=float)
+              use=valid & (q==0) & np.isfinite(an) & np.isfinite(ae) & np.isfinite(mn) & np.isfinite(me)
+              if np.count_nonzero(use)<20:
+                  raise RuntimeError(f"{p}: insufficient clean status samples")
+              tu=t[use]; an=an[use]; ae=ae[use]; mn=mn[use]; me=me[use]
+              keep=tu-lag_us>=tu[0]
+              tu=tu[keep]; an=an[keep]; ae=ae[keep]; mn=mn[keep]; me=me[keep]
+              dn=an-np.interp(tu-lag_us,tu,an)
+              de=ae-np.interp(tu-lag_us,tu,ae)
+              for axis,a,m,dd in ((0,an,mn,dn),(1,ae,me,de)):
+                  for ai,mi,di in zip(a,m,dd):
+                      # two axis-specific intercepts + shared scale/dynamic
+                      rows.append(([1.0 if axis==0 else 0.0,1.0 if axis==1 else 0.0,ai,di],mi-ai))
+
+          X=np.asarray([r[0] for r in rows],dtype=float)
+          y=np.asarray([r[1] for r in rows],dtype=float)
+          coef,*_=np.linalg.lstsq(X,y,rcond=None)
+          pred=X@coef
+          report={
+              "bias_n":float(coef[0]),
+              "bias_e":float(coef[1]),
+              "SAD_AS_MU":float(coef[2]),
+              "SAD_AD_MU":float(coef[3]),
+              "sample_count":int(len(y)),
+              "rmse":float(np.sqrt(np.mean((y-pred)**2))),
+          }
+          Path("build/sad_quad_ab/square_normal_fit.json").write_text(json.dumps(report,indent=2)+"\n")
+          print(json.dumps(report,indent=2))
+          PY
+
+      - name: Validate square-map detector on held-out maneuvers and attacks
+        run: |
+          set -eux
+          OUT=build/sad_quad_ab
+          mkdir -p "$OUT/validation"
+          GAIN=$(python3 -c 'import json; print(json.load(open("build/sad_quad_ab/square_gain.json"))["candidate_parameter"]["SAD_THR_GAIN"])')
+          AS=$(python3 -c 'import json; print(json.load(open("build/sad_quad_ab/square_normal_fit.json"))["SAD_AS_MU"])')
+          AD=$(python3 -c 'import json; print(json.load(open("build/sad_quad_ab/square_normal_fit.json"))["SAD_AD_MU"])')
+          COMMON="--thr-map 1 --thr-gain $GAIN --normal-scale-mean $AS --normal-dynamic-mean $AD --weight-acceleration 142.17990926253765 --weight-velocity 71.20519081577794 --weight-position 50.66817247677383 --glrt-mean 0 --glrt-sd 1 --threshold 1000000 --cusum-drift 0.5 --consecutive 3"
+
+          run_case () {
+            LABEL="$1"; shift
+            MARKER=$(mktemp)
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py "$@" $COMMON
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -name result.json -type f -newer "$MARKER" | head -n 1)
+            rm -f "$MARKER"
+            test -n "$RESULT"
+            cp "$RESULT" "$OUT/validation/${LABEL}.json"
+          }
+
+          run_case baseline_turn --scenario turn --speed 1.3 --turn-duration 8 --straight-before 10 --straight-after 14
+          run_case accel --scenario maneuver --maneuver accel --speed 2.2
+          run_case slalom --scenario maneuver --maneuver slalom --speed 1.8
+          run_case hard_turn --scenario maneuver --maneuver hard-turn --speed 2.2
+          run_case attack_100_20 --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 20 --pva-observation 10
+          run_case attack_100_40 --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 40 --pva-observation 20
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path("build/sad_quad_ab")
+          rows=[]
+          for p in sorted((root/"validation").glob("*.json")):
+              r=json.load(open(p)); d=r["detector"]
+              rows.append({
+                  "case":p.stem,
+                  "glrt_mean":d.get("glrt_mean"),
+                  "glrt_p95":d.get("glrt_p95"),
+                  "glrt_max":d.get("glrt_max"),
+                  "pre_attack_alert_count":d.get("pre_attack_alert_count"),
+                  "post_attack_glrt_mean":d.get("post_attack_glrt_mean"),
+                  "post_attack_glrt_max":d.get("post_attack_glrt_max"),
+              })
+          summary={
+              "square_gain":json.load(open(root/"square_gain.json"))["candidate_parameter"]["SAD_THR_GAIN"],
+              "normal_fit":json.load(open(root/"square_normal_fit.json")),
+              "validation":rows,
+          }
+          (root/"summary.json").write_text(json.dumps(summary,indent=2)+"\n")
+          print(json.dumps(summary,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sad-quadratic-thrust-ab
+          path: build/sad_quad_ab
+          retention-days: 5
