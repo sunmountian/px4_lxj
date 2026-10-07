@@ -1,0 +1,111 @@
+name: Sensor Attack Detector Rotor Drag Ablation
+
+on:
+  push:
+    branches:
+      - sad-v2-fixed-model
+    paths:
+      - '.github/workflows/sad_rotor_drag_ablation.yml'
+
+concurrency:
+  group: sad-rotor-drag-ablation
+  cancel-in-progress: true
+
+jobs:
+  drag-ablation:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Prepare environment
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+
+      - name: Run rotor-drag mechanism ablation
+        run: |
+          set -eux
+          OUT=build/sad_rotor_drag
+          rm -rf build/sad_v2_smoke "$OUT"
+          mkdir -p "$OUT"
+
+          MODEL=$(find Tools/sitl_gazebo/models -path '*/iris/iris.sdf' -type f | head -n 1)
+          test -n "$MODEL"
+          cp "$MODEL" /tmp/iris_drag_base.sdf
+
+          COMMON="--normal-scale-mean -0.33720698952674866 --normal-scale-sd 0.02 --normal-dynamic-mean 0.42821773886680603 --normal-dynamic-sd 0.05 --weight-acceleration 142.17990926253765 --weight-velocity 71.20519081577794 --weight-position 50.66817247677383 --glrt-mean 4.309805243626817 --glrt-sd 6.958476444883066 --threshold 43.18242814116727 --cusum-drift 0.5 --consecutive 3"
+
+          patch_drag () {
+            FACTOR="$1"
+            cp /tmp/iris_drag_base.sdf "$MODEL"
+            python3 - "$MODEL" "$FACTOR" <<'PY'
+          import re,sys
+          from pathlib import Path
+          p=Path(sys.argv[1]); factor=float(sys.argv[2])
+          s=p.read_text()
+          vals=[]
+          def repl(m):
+              x=float(m.group(1)); vals.append((x,x*factor))
+              return f"<rotorDragCoefficient>{x*factor:.12g}</rotorDragCoefficient>"
+          s,n=re.subn(r"<rotorDragCoefficient>\s*([0-9eE+\-.]+)\s*</rotorDragCoefficient>", repl, s)
+          if n < 4:
+              raise SystemExit(f"expected >=4 rotor drag entries, got {n}")
+          p.write_text(s)
+          print({"factor":factor,"count":n,"values":vals[:4]})
+          PY
+          }
+
+          run_one () {
+            LABEL="$1"; shift
+            MARKER=$(mktemp)
+            touch "$MARKER"
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py "$@" $COMMON
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -name result.json -type f -newer "$MARKER" | head -n 1)
+            rm -f "$MARKER"
+            test -n "$RESULT"
+            cp "$RESULT" "$OUT/${LABEL}.json"
+          }
+
+          for FACTOR in 0 1 2; do
+            patch_drag "$FACTOR"
+            run_one "drag_${FACTOR}_slalom" --scenario maneuver --maneuver slalom --speed 1.8
+            run_one "drag_${FACTOR}_hard" --scenario maneuver --maneuver hard-turn --speed 2.2
+          done
+          cp /tmp/iris_drag_base.sdf "$MODEL"
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path("build/sad_rotor_drag")
+          rows=[]
+          for p in sorted(root.glob("*.json")):
+              if p.name=="summary.json": continue
+              r=json.load(open(p)); d=r["detector"]
+              rows.append({
+                  "case":p.stem,
+                  "alert_samples":d.get("alert_samples"),
+                  "glrt_mean":d.get("glrt_mean"),
+                  "glrt_p95":d.get("glrt_p95"),
+                  "glrt_max":d.get("glrt_max"),
+                  "cusum_max":d.get("cusum_max"),
+              })
+          (root/"summary.json").write_text(json.dumps(rows,indent=2)+"\n")
+          print(json.dumps(rows,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sad-rotor-drag-ablation
+          path: build/sad_rotor_drag
+          retention-days: 5
