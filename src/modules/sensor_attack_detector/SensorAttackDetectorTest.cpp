@@ -64,6 +64,24 @@ float numericalDoubleIntegral(size_t basis_index, float tau)
 	return sum;
 }
 
+
+float numericalTripleIntegral(size_t basis_index, float tau)
+{
+	constexpr int steps = 20000;
+	const float step = tau / static_cast<float>(steps);
+	float sum = 0.f;
+
+	for (int i = 0; i < steps; ++i) {
+		const float sample = (static_cast<float>(i) + 0.5f) * step;
+		float basis[AttackBasis::kSize] {};
+		AttackBasis::evaluate(sample, basis);
+		const float remaining = tau - sample;
+		sum += 0.5f * remaining * remaining * basis[basis_index] * step;
+	}
+
+	return sum;
+}
+
 } // namespace
 
 TEST(AttackBasis, PartitionOfUnity)
@@ -120,6 +138,18 @@ TEST(AttackBasis, AnalyticDoubleIntegralMatchesNumericalIntegration)
 
 		for (size_t i = 0; i < AttackBasis::kSize; ++i) {
 			EXPECT_NEAR(integral[i], numericalDoubleIntegral(i, tau), 2e-5f);
+		}
+	}
+}
+
+TEST(AttackBasis, AnalyticTripleIntegralMatchesNumericalIntegration)
+{
+	for (float tau : {0.07f, 0.2f, 0.53f, 0.81f, 1.f}) {
+		float integral[AttackBasis::kSize] {};
+		AttackBasis::evaluateTripleIntegral(tau, integral);
+
+		for (size_t i = 0; i < AttackBasis::kSize; ++i) {
+			EXPECT_NEAR(integral[i], numericalTripleIntegral(i, tau), 2e-5f);
 		}
 	}
 }
@@ -248,6 +278,65 @@ TEST(AxisGlrtAccumulator, StructuredAttackProducesPositiveEvidence)
 	ASSERT_TRUE(result.valid);
 	EXPECT_GT(result.glrt, 10.f);
 	EXPECT_LT(result.cost_attack, result.cost_null);
+}
+
+TEST(AxisGlrtAccumulator, DragConsistentStructuredAttackProducesPositiveEvidence)
+{
+	AxisGlrtAccumulator accumulator;
+	accumulator.reset();
+	constexpr float drag_rate = 0.37f;
+	const float coefficients[AttackBasis::kSize] {0.8f, -0.3f, -0.9f, 0.4f, 0.7f, -0.5f};
+
+	for (int sample = 0; sample <= 80; ++sample) {
+		const float tau = static_cast<float>(sample) / 80.f;
+		const float time = kWindowSeconds * tau;
+		float zero[AttackBasis::kSize] {};
+		float first[AttackBasis::kSize] {};
+		float second[AttackBasis::kSize] {};
+		float third[AttackBasis::kSize] {};
+		AttackBasis::evaluate(tau, zero);
+		AttackBasis::evaluateIntegral(tau, first);
+		AttackBasis::evaluateDoubleIntegral(tau, second);
+		AttackBasis::evaluateTripleIntegral(tau, third);
+		float acceleration_basis[AttackBasis::kSize] {};
+		float velocity_basis[AttackBasis::kSize] {};
+		float position_basis[AttackBasis::kSize] {};
+		float attack_acceleration = 0.f;
+		float attack_velocity = 0.f;
+		float attack_position = 0.f;
+
+		for (size_t i = 0; i < AttackBasis::kSize; ++i) {
+			const float first_physical = kWindowSeconds * first[i];
+			const float second_physical = kWindowSeconds * kWindowSeconds * second[i];
+			const float third_physical = kWindowSeconds * kWindowSeconds * kWindowSeconds * third[i];
+			acceleration_basis[i] = zero[i] + drag_rate * first_physical;
+			velocity_basis[i] = first_physical + drag_rate * second_physical;
+			position_basis[i] = second_physical + drag_rate * third_physical;
+			attack_acceleration += acceleration_basis[i] * coefficients[i];
+			attack_velocity += velocity_basis[i] * coefficients[i];
+			attack_position += position_basis[i] * coefficients[i];
+		}
+
+		// A constant unknown attack-velocity offset at the window start maps
+		// exactly into the existing normal acceleration-bias family.
+		const float attack_velocity_start = 0.6f;
+		const float nuisance_acceleration = drag_rate * attack_velocity_start;
+		const float acceleration_normal[AxisGlrtAccumulator::kNormalDim] {1.f};
+		const float velocity_normal[AxisGlrtAccumulator::kNormalDim] {time};
+		const float position_normal[AxisGlrtAccumulator::kNormalDim] {0.5f * time * time};
+		accumulator.addObservation(nuisance_acceleration + attack_acceleration, 1.f,
+					   acceleration_normal, acceleration_basis);
+		accumulator.addObservation(nuisance_acceleration * time + attack_velocity, 1.f,
+					   velocity_normal, velocity_basis, AxisGlrtAccumulator::kVelocity);
+		accumulator.addObservation(0.5f * nuisance_acceleration * time * time + attack_position, 1.f,
+					   position_normal, position_basis, AxisGlrtAccumulator::kPosition);
+	}
+
+	const AxisGlrtAccumulator::Result result = accumulator.solve(0.01f);
+	ASSERT_TRUE(result.valid);
+	EXPECT_GT(result.glrt, 10.f);
+	EXPECT_LT(result.cost_attack, result.cost_null);
+	EXPECT_NEAR(result.normal_parameters[0], drag_rate * 0.6f, 2e-2f);
 }
 
 TEST(AxisGlrtAccumulator, DegenerateSystemIsRejected)
