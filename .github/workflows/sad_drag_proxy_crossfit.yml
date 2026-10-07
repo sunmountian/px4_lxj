@@ -7,6 +7,10 @@ on:
     paths:
       - '.github/workflows/sad_drag_proxy_crossfit.yml'
 
+concurrency:
+  group: sad-drag-proxy-crossfit
+  cancel-in-progress: true
+
 jobs:
   drag-proxy:
     runs-on: ubuntu-latest
@@ -64,8 +68,8 @@ jobs:
           LAG_US=200000
 
           def ds(u,name):
-              xs=[x for x in u.data_list if x.name==name]
-              if len(xs)!=1: raise RuntimeError(f"{name}: {len(xs)}")
+              xs=[x for x in u.data_list if x.name==name and x.multi_id==0]
+              if len(xs)!=1: raise RuntimeError(f"{name}[0]: {len(xs)}")
               return xs[0].data
           def prev(ts,vals,target):
               idx=np.searchsorted(ts,target,side="right")-1
