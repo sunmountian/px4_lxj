@@ -206,6 +206,8 @@ private:
 		(ParamFloat<px4::params::SAD_WP>) _param_sad_wp,
 		(ParamInt<px4::params::SAD_ACT_SRC>) _param_sad_act_src,
 		(ParamFloat<px4::params::SAD_THR_GAIN>) _param_sad_thr_gain,
+		(ParamInt<px4::params::SAD_MAP_MODE>) _param_sad_map_mode,
+		(ParamFloat<px4::params::SAD_MAP_IDLE>) _param_sad_map_idle,
 		(ParamFloat<px4::params::SAD_GPS_EPH>) _param_sad_gps_eph,
 		(ParamFloat<px4::params::SAD_REG>) _param_sad_reg,
 		(ParamFloat<px4::params::SAD_AS_MU>) _param_sad_as_mu,
