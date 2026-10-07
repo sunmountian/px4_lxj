@@ -126,6 +126,18 @@ PARAM_DEFINE_FLOAT(SAD_GPS_EPH, 5.f);
  */
 PARAM_DEFINE_FLOAT(SAD_REG, 0.1f);
 
+/**
+ * Attack-basis observation-order mask
+ *
+ * Experimental diagnostic switch. Bit 0 enables acceleration attack basis,
+ * bit 1 velocity, and bit 2 position. The production default is all orders.
+ *
+ * @min 1
+ * @max 7
+ * @group Sensor Attack Detector
+ */
+PARAM_DEFINE_INT32(SAD_ATK_MASK, 7);
+
 
 /**
  * Fixed nominal actuator-scale correction coefficient
