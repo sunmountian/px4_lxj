@@ -735,10 +735,38 @@ bool SensorAttackDetector::evaluateWindowDamped(uint64_t end_timestamp,
 		return false;
 	}
 
+	float thrust_time_sum = 0.f;
+	float thrust_time_s = 0.f;
+
+	for (size_t i = 0; i < _imu_buffer.size(); ++i) {
+		const ImuEvent &event = _imu_buffer[i];
+		const uint64_t duration_us = static_cast<uint64_t>(event.dt_s * 1e6f);
+		const uint64_t event_start = event.timestamp > duration_us ? event.timestamp - duration_us : 0;
+		const uint64_t segment_start = event_start > start_timestamp ? event_start : start_timestamp;
+		const uint64_t segment_end = event.timestamp < end_timestamp ? event.timestamp : end_timestamp;
+
+		if (segment_end > segment_start) {
+			const float dt_s = static_cast<float>(segment_end - segment_start) * 1e-6f;
+			thrust_time_sum += event.thrust_indicator * dt_s;
+			thrust_time_s += dt_s;
+		}
+	}
+
+	const float mean_thrust_indicator = thrust_time_s > 1e-3f ? thrust_time_sum / thrust_time_s : 1.f;
+
 	const float acceleration_weight = _param_sad_wa.get() / static_cast<float>(imu_sample_count);
 	const float velocity_weight = _param_sad_wv.get() / static_cast<float>(gps_sample_count);
 	const float position_weight = _param_sad_wp.get() / static_cast<float>(gps_sample_count);
 	const float window_s = static_cast<float>(kWindowDurationUs) * 1e-6f;
+
+	auto local_drag = [&](const ImuEvent &event) {
+		if (!_param_sad_drag_mod.get()) {
+			return drag;
+		}
+
+		const float ratio = event.thrust_indicator / fmaxf(mean_thrust_indicator, 1e-3f);
+		return drag * math::constrain(ratio, 0.25f, 2.5f);
+	};
 
 	auto corrected_input = [&](const ImuEvent &event, uint64_t center_timestamp,
 				   float (&input)[2]) -> bool {
@@ -761,42 +789,53 @@ bool SensorAttackDetector::evaluateWindowDamped(uint64_t end_timestamp,
 		return PX4_ISFINITE(input[0]) && PX4_ISFINITE(input[1]);
 	};
 
-	auto advance_velocity = [&](float dt_s, const float (&input)[2], float (&velocity)[2]) {
+	auto advance_velocity = [&](float dt_s, float segment_drag, const float (&input)[2],
+				 float (&velocity)[2], float &normal_velocity) {
 		if (!(dt_s > 0.f)) {
 			return;
 		}
 
-		const float decay = expf(-drag * dt_s);
-		const float phi = (1.f - decay) / drag;
+		const float decay = expf(-segment_drag * dt_s);
+		const float phi = (1.f - decay) / segment_drag;
 
 		for (size_t axis = 0; axis < 2; ++axis) {
 			velocity[axis] = decay * velocity[axis] + phi * input[axis];
 		}
+
+		normal_velocity = decay * normal_velocity + phi;
 	};
 
-	auto advance_state = [&](float dt_s, const float (&input)[2], float (&velocity)[2],
-				 float (&position)[2]) {
+	auto advance_state = [&](float dt_s, float segment_drag, const float (&input)[2],
+				 float (&velocity)[2], float (&position)[2],
+				 float &normal_velocity, float &normal_position) {
 		if (!(dt_s > 0.f)) {
 			return;
 		}
 
-		const float decay = expf(-drag * dt_s);
-		const float phi = (1.f - decay) / drag;
-		const float psi = (dt_s - phi) / drag;
+		const float decay = expf(-segment_drag * dt_s);
+		const float phi = (1.f - decay) / segment_drag;
+		const float psi = (dt_s - phi) / segment_drag;
 		float old_velocity[2] {velocity[0], velocity[1]};
+		const float old_normal_velocity = normal_velocity;
 
 		for (size_t axis = 0; axis < 2; ++axis) {
 			position[axis] += phi * old_velocity[axis] + psi * input[axis];
 			velocity[axis] = decay * old_velocity[axis] + phi * input[axis];
 		}
+
+		normal_position += phi * old_normal_velocity + psi;
+		normal_velocity = decay * old_normal_velocity + phi;
 	};
 
 	auto propagate_reference = [&](uint64_t target_timestamp, float (&velocity)[2],
-				       float (&position)[2], float &covered_time_s) -> bool {
+				       float (&position)[2], float &normal_velocity,
+				       float &normal_position, float &covered_time_s) -> bool {
 		velocity[0] = gps_start.velocity[0];
 		velocity[1] = gps_start.velocity[1];
 		position[0] = 0.f;
 		position[1] = 0.f;
+		normal_velocity = 0.f;
+		normal_position = 0.f;
 		covered_time_s = 0.f;
 		uint64_t cursor = start_timestamp;
 
@@ -828,7 +867,7 @@ bool SensorAttackDetector::evaluateWindowDamped(uint64_t end_timestamp,
 			}
 
 			const float dt_s = static_cast<float>(segment_end - segment_start) * 1e-6f;
-			advance_state(dt_s, input, velocity, position);
+			advance_state(dt_s, local_drag(event), input, velocity, position, normal_velocity, normal_position);
 			covered_time_s += dt_s;
 			cursor = segment_end;
 
@@ -847,6 +886,7 @@ bool SensorAttackDetector::evaluateWindowDamped(uint64_t end_timestamp,
 	east_accumulator.reset();
 
 	float reference_velocity[2] {gps_start.velocity[0], gps_start.velocity[1]};
+	float reference_normal_velocity = 0.f;
 	uint64_t reference_time = start_timestamp;
 	float acceleration_coverage_s = 0.f;
 
@@ -882,7 +922,7 @@ bool SensorAttackDetector::evaluateWindowDamped(uint64_t end_timestamp,
 		if ((center_timestamp >= segment_start) && (center_timestamp <= segment_end)) {
 			if (center_timestamp > reference_time) {
 				advance_velocity(static_cast<float>(center_timestamp - reference_time) * 1e-6f,
-						 input, reference_velocity);
+						 local_drag(event), input, reference_velocity, reference_normal_velocity);
 				reference_time = center_timestamp;
 			}
 
@@ -897,11 +937,13 @@ bool SensorAttackDetector::evaluateWindowDamped(uint64_t end_timestamp,
 				}
 			}
 
-			const float normal_basis[AxisGlrtAccumulator::kNormalDim] {expf(-drag * elapsed_s)};
+			const float segment_drag = local_drag(event);
+			const float normal_acceleration = 1.f - segment_drag * reference_normal_velocity;
+			const float normal_basis[AxisGlrtAccumulator::kNormalDim] {normal_acceleration};
 			const float north_residual = event.acceleration_measured[0]
-						     - (input[0] - drag * reference_velocity[0]);
+						     - (input[0] - segment_drag * reference_velocity[0]);
 			const float east_residual = event.acceleration_measured[1]
-						    - (input[1] - drag * reference_velocity[1]);
+						    - (input[1] - segment_drag * reference_velocity[1]);
 			north_accumulator.addObservation(north_residual, acceleration_weight, normal_basis, attack_basis,
 							  AxisGlrtAccumulator::kAcceleration);
 			east_accumulator.addObservation(east_residual, acceleration_weight, normal_basis, attack_basis,
@@ -910,7 +952,7 @@ bool SensorAttackDetector::evaluateWindowDamped(uint64_t end_timestamp,
 
 		if (segment_end > reference_time) {
 			advance_velocity(static_cast<float>(segment_end - reference_time) * 1e-6f,
-					 input, reference_velocity);
+					 local_drag(event), input, reference_velocity, reference_normal_velocity);
 			reference_time = segment_end;
 		}
 
@@ -931,18 +973,20 @@ bool SensorAttackDetector::evaluateWindowDamped(uint64_t end_timestamp,
 
 		float predicted_velocity[2] {};
 		float predicted_position[2] {};
+		float normal_velocity = 0.f;
+		float normal_position = 0.f;
 		float covered_time_s = 0.f;
 
-		if (!propagate_reference(event.timestamp, predicted_velocity, predicted_position, covered_time_s)) {
+		if (!propagate_reference(event.timestamp, predicted_velocity, predicted_position,
+					 normal_velocity, normal_position, covered_time_s)) {
 			_data_quality_flags |= sensor_attack_status_s::DATA_QUALITY_WINDOW_COVERAGE;
 			return false;
 		}
 
 		const float elapsed_s = static_cast<float>(event.timestamp - start_timestamp) * 1e-6f;
 		const float tau = elapsed_s / window_s;
-		const float decay = expf(-drag * elapsed_s);
-		const float velocity_normal = (1.f - decay) / drag;
-		const float position_normal = (elapsed_s - velocity_normal) / drag;
+		const float velocity_normal = normal_velocity;
+		const float position_normal = normal_position;
 		float velocity_basis[AttackBasis::kSize] {};
 		float position_basis[AttackBasis::kSize] {};
 		AttackBasis::evaluateIntegral(tau, velocity_basis);
