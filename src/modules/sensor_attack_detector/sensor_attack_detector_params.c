@@ -97,6 +97,28 @@ PARAM_DEFINE_INT32(SAD_ACT_SRC, 1);
 PARAM_DEFINE_FLOAT(SAD_THR_GAIN, 3.47118998f);
 
 /**
+ * Experimental actuator mapping mode
+ *
+ * @value 0 linear normalized motor command
+ * @value 1 squared normalized motor command after adding SAD_MAP_IDLE
+ * @min 0
+ * @max 1
+ * @group Sensor Attack Detector
+ */
+PARAM_DEFINE_INT32(SAD_MAP_MODE, 0);
+
+/**
+ * Experimental normalized motor-command idle offset
+ *
+ * Used only when SAD_MAP_MODE is 1.
+ *
+ * @min 0
+ * @max 0.5
+ * @group Sensor Attack Detector
+ */
+PARAM_DEFINE_FLOAT(SAD_MAP_IDLE, 0.f);
+
+/**
  * Maximum accepted GPS horizontal position error
  *
  * @unit m
