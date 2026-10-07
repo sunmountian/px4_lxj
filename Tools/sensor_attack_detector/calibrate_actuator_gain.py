@@ -292,6 +292,7 @@ def main():
     report = {
         "schema": "px4.sensor_attack_detector.actuator_gain_calibration.v1",
         "nominal_hover_only": True,
+        "mapping": args.mapping,
         "manifest": str(args.manifest.resolve()),
         "flight_count": len(flights),
         "candidate_parameter": {"SAD_THR_GAIN": gain},
