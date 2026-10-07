@@ -1,0 +1,175 @@
+name: Sensor Attack Detector Thesis Finalize Resume
+
+on:
+  push:
+    branches:
+      - sad-v2-fixed-model
+    paths:
+      - '.github/workflows/sad_thesis_finalize_resume.yml'
+
+env:
+  AS_MU: "-0.33720698952674866"
+  AD_MU: "0.42821773886680603"
+  THR_GAIN: "3.47118998"
+  DRAG_K: "0.20"
+  DYN_LAG: "0.2"
+  SOURCE_RUN: "37603604658"
+
+jobs:
+  thresholds:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: thesis-nominal-*
+          path: build/thesis_nominal_all
+          merge-multiple: true
+          run-id: ${{ env.SOURCE_RUN }}
+          github-token: ${{ github.token }}
+      - name: Fit normalization and threshold from completed flights
+        run: |
+          set -eux
+          python3 -m pip install --disable-pip-version-check pyulog numpy
+          printf 'flight_id,split,scenario,nominal,ulog\n' > build/thesis_nominal_all/manifest.csv
+          for F in build/thesis_nominal_all/manifest_*.csv; do tail -n +2 "$F" >> build/thesis_nominal_all/manifest.csv; done
+          sed -i 's#build/thesis_nominal_all/ulogs/#ulogs/#g' build/thesis_nominal_all/manifest.csv
+          test "$(($(wc -l < build/thesis_nominal_all/manifest.csv)-1))" -eq 30
+          python3 Tools/sensor_attack_detector/calibrate_thresholds.py --manifest build/thesis_nominal_all/manifest.csv --output build/thesis_nominal_all/thresholds.json --false-alarm-rate 0.05 --drift 0.5 --consecutive 3
+          cat build/thesis_nominal_all/thresholds.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: thesis-thresholds-resumed
+          path: |
+            build/thesis_nominal_all/thresholds.json
+            build/thesis_nominal_all/thresholds_flights.csv
+          retention-days: 5
+
+  attacks:
+    needs: thresholds
+    strategy:
+      fail-fast: false
+      matrix:
+        case: [north_pos_100_20, north_neg_100_20, east_pos_100_20, east_neg_100_20, north_pos_100_30, north_pos_100_40, sinusoidal_100_20]
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+      - uses: actions/download-artifact@v4
+        with:
+          name: thesis-weights
+          path: build/thesis_parallel_weights
+          run-id: ${{ env.SOURCE_RUN }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: thesis-thresholds-resumed
+          path: build/thesis_nominal_all
+      - name: Prepare
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+      - name: Run final attack
+        env:
+          CASE: ${{ matrix.case }}
+        run: |
+          set -eux
+          WA=$(python3 -c 'import json; print(json.load(open("build/thesis_parallel_weights/weights.json"))["candidate_parameters"]["SAD_WA"])')
+          WV=$(python3 -c 'import json; print(json.load(open("build/thesis_parallel_weights/weights.json"))["candidate_parameters"]["SAD_WV"])')
+          WP=$(python3 -c 'import json; print(json.load(open("build/thesis_parallel_weights/weights.json"))["candidate_parameters"]["SAD_WP"])')
+          GMU=$(python3 -c 'import json; print(json.load(open("build/thesis_nominal_all/thresholds.json"))["candidate_parameters"]["SAD_GLRT_MU"])')
+          GSD=$(python3 -c 'import json; print(json.load(open("build/thesis_nominal_all/thresholds.json"))["candidate_parameters"]["SAD_GLRT_SD"])')
+          THR=$(python3 -c 'import json; print(json.load(open("build/thesis_nominal_all/thresholds.json"))["candidate_parameters"]["SAD_THRESH"])')
+          COMMON="--thr-map 0 --thr-gain $THR_GAIN --drag-k $DRAG_K --drag-mod 0 --normal-scale-mean $AS_MU --normal-scale-sd 0.02 --normal-dynamic-mean $AD_MU --dynamic-lag $DYN_LAG --normal-dynamic-sd 0.05 --weight-acceleration $WA --weight-velocity $WV --weight-position $WP --glrt-mean $GMU --glrt-sd $GSD --threshold $THR --cusum-drift 0.5 --consecutive 3 --attack-mask 7"
+          case "$CASE" in
+            north_pos_100_20) ARGS="--scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 20 --pva-observation 14" ;;
+            north_neg_100_20) ARGS="--scenario pva-hover --pva-north -100 --pva-east 0 --pva-ramp 20 --pva-observation 14" ;;
+            east_pos_100_20) ARGS="--scenario pva-hover --pva-north 0 --pva-east 100 --pva-ramp 20 --pva-observation 14" ;;
+            east_neg_100_20) ARGS="--scenario pva-hover --pva-north 0 --pva-east -100 --pva-ramp 20 --pva-observation 14" ;;
+            north_pos_100_30) ARGS="--scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 30 --pva-observation 16" ;;
+            north_pos_100_40) ARGS="--scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 40 --pva-observation 20" ;;
+            sinusoidal_100_20) ARGS="--scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 20 --pva-profile sinusoidal --pva-observation 14" ;;
+          esac
+          rm -rf build/sad_v2_smoke build/thesis_attack
+          mkdir -p build/thesis_attack
+          python3 Tools/sensor_attack_detector/run_v2_smoke.py $ARGS $COMMON
+          RESULT=$(find build/sad_v2_smoke -maxdepth 2 -name result.json -type f | head -n 1)
+          cp "$RESULT" "build/thesis_attack/${CASE}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: thesis-final-attack-${{ matrix.case }}
+          path: build/thesis_attack
+          retention-days: 5
+
+  summary:
+    needs: attacks
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: thesis-weights
+          path: build/final/weights
+          run-id: ${{ env.SOURCE_RUN }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: thesis-thresholds-resumed
+          path: build/final/thresholds
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: thesis-final-attack-*
+          path: build/final/attacks
+          merge-multiple: true
+      - name: Summarize final thesis experiment
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path("build/final")
+          w=json.load(open(root/"weights/weights.json"))
+          t=json.load(open(root/"thresholds/thresholds.json"))
+          tests=[x for x in t["flights"] if x["split"]=="test"]
+          attacks=[]
+          for p in sorted((root/"attacks").glob("*.json")):
+              r=json.load(open(p)); d=r["detector"]
+              attacks.append({
+                  "case":p.stem,
+                  "pre_attack_alert_count":d.get("pre_attack_alert_count"),
+                  "post_attack_alert_count":d.get("post_attack_alert_count"),
+                  "first_alert_delay_s":d.get("first_alert_delay_s"),
+                  "post_attack_glrt_mean":d.get("post_attack_glrt_mean"),
+                  "post_attack_glrt_max":d.get("post_attack_glrt_max"),
+                  "cusum_max":d.get("cusum_max"),
+              })
+          out={
+              "model":"thesis_fixed_7x7_constant_damping",
+              "physical_reference":{"SAD_THR_MAP":0,"SAD_THR_GAIN":3.47118998,"SAD_DRAG_K":0.20,"SAD_DRAG_MOD":0,"SAD_DYN_LAG":0.2},
+              "weights":w["candidate_parameters"],
+              "residual_sigma":w["residual_sigma"],
+              "threshold":t["candidate_parameters"],
+              "flight_level_threshold":t["flight_level_threshold"],
+              "held_out_test_flights":tests,
+              "held_out_test_alert_count":sum(bool(x["candidate_alert"]) for x in tests),
+              "attack_results":attacks,
+          }
+          Path("build/final/summary.json").write_text(json.dumps(out,indent=2,sort_keys=True)+"\n")
+          print(json.dumps(out,indent=2,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sad-thesis-final-resumed
+          path: build/final
+          retention-days: 5
