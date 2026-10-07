@@ -1,0 +1,162 @@
+name: Sensor Attack Detector Dynamic Lag Scan
+
+on:
+  push:
+    branches:
+      - sad-v2-fixed-model
+    paths:
+      - '.github/workflows/sad_dynamic_lag_scan.yml'
+
+jobs:
+  lag-scan:
+    strategy:
+      fail-fast: false
+      matrix:
+        lag_ms: [50, 100, 200, 300]
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Patch lag and build
+        env:
+          LAG_MS: ${{ matrix.lag_ms }}
+        run: |
+          set -eux
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path("src/modules/sensor_attack_detector/SensorAttackDetector.hpp")
+          s=p.read_text()
+          old="static constexpr uint64_t kDynamicLagUs{200_ms};"
+          new=f"static constexpr uint64_t kDynamicLagUs{{{os.environ['LAG_MS']}_ms}};"
+          if old not in s:
+              raise SystemExit("lag constant anchor not found")
+          p.write_text(s.replace(old,new))
+          PY
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+
+      - name: Fit normal correction for candidate lag
+        env:
+          LAG_MS: ${{ matrix.lag_ms }}
+        run: |
+          set -eux
+          OUT=build/sad_lag_scan
+          mkdir -p "$OUT/fit"
+          GAIN=3.47118998
+
+          run_fit () {
+            LABEL="$1"; shift
+            MARKER=$(mktemp)
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py "$@"               --thr-map 0 --thr-gain "$GAIN"               --normal-scale-mean 0 --normal-dynamic-mean 0               --weight-acceleration 1 --weight-velocity 1 --weight-position 1               --glrt-mean 0 --glrt-sd 1 --threshold 1000000
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -name result.json -type f -newer "$MARKER" | head -n 1)
+            rm -f "$MARKER"
+            test -n "$RESULT"
+            ULOG=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ulog"])' "$RESULT")
+            cp "$ULOG" "$OUT/fit/${LABEL}.ulg"
+          }
+
+          run_fit turn  --scenario turn --speed 1.1 --turn-duration 10 --straight-before 10 --straight-after 12
+          run_fit accel --scenario maneuver --maneuver accel --speed 1.8
+          run_fit slalom --scenario maneuver --maneuver slalom --speed 1.5
+
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          import numpy as np
+          from pyulog import ULog
+
+          lag_us=float(os.environ["LAG_MS"])*1000.0
+          rows=[]
+          for p in sorted(Path("build/sad_lag_scan/fit").glob("*.ulg")):
+              u=ULog(str(p),None,disable_str_exceptions=True)
+              d=[x for x in u.data_list if x.name=="sensor_attack_status"][0].data
+              t=np.asarray(d["timestamp_sample"],dtype=float)
+              valid=np.asarray(d["valid"],dtype=bool)
+              q=np.asarray(d["data_quality_flags"],dtype=np.uint32)
+              for axis,name in ((0,"n"),(1,"e")):
+                  a=np.asarray(d[f"accel_actuator_{name}"],dtype=float)
+                  m=np.asarray(d[f"accel_meas_{name}"],dtype=float)
+                  use=valid & (q==0) & np.isfinite(a) & np.isfinite(m)
+                  tu=t[use]; au=a[use]; mu=m[use]
+                  keep=tu-lag_us>=tu[0]
+                  tu=tu[keep]; au=au[keep]; mu=mu[keep]
+                  delayed=np.interp(tu-lag_us,tu,au)
+                  dyn=au-delayed
+                  for ai,mi,di in zip(au,mu,dyn):
+                      rows.append(([1.0 if axis==0 else 0.0,1.0 if axis==1 else 0.0,ai,di],mi-ai))
+          X=np.asarray([r[0] for r in rows]); y=np.asarray([r[1] for r in rows])
+          coef,*_=np.linalg.lstsq(X,y,rcond=None)
+          report={
+              "lag_ms":float(os.environ["LAG_MS"]),
+              "bias_n":float(coef[0]),"bias_e":float(coef[1]),
+              "SAD_AS_MU":float(coef[2]),"SAD_AD_MU":float(coef[3]),
+              "rmse":float(np.sqrt(np.mean((y-X@coef)**2))),
+              "samples":int(len(y)),
+          }
+          Path("build/sad_lag_scan/fit.json").write_text(json.dumps(report,indent=2)+"\n")
+          print(json.dumps(report,indent=2))
+          PY
+
+      - name: Held-out validation
+        env:
+          LAG_MS: ${{ matrix.lag_ms }}
+        run: |
+          set -eux
+          OUT=build/sad_lag_scan
+          AS=$(python3 -c 'import json; print(json.load(open("build/sad_lag_scan/fit.json"))["SAD_AS_MU"])')
+          AD=$(python3 -c 'import json; print(json.load(open("build/sad_lag_scan/fit.json"))["SAD_AD_MU"])')
+          COMMON="--thr-map 0 --thr-gain 3.47118998 --normal-scale-mean $AS --normal-dynamic-mean $AD --weight-acceleration 142.17990926253765 --weight-velocity 71.20519081577794 --weight-position 50.66817247677383 --glrt-mean 0 --glrt-sd 1 --threshold 1000000"
+          mkdir -p "$OUT/validation"
+
+          run_case () {
+            LABEL="$1"; shift
+            MARKER=$(mktemp)
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py "$@" $COMMON
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -name result.json -type f -newer "$MARKER" | head -n 1)
+            rm -f "$MARKER"
+            test -n "$RESULT"
+            cp "$RESULT" "$OUT/validation/${LABEL}.json"
+          }
+
+          run_case baseline --scenario turn --speed 1.3 --turn-duration 8 --straight-before 10 --straight-after 14
+          run_case accel --scenario maneuver --maneuver accel --speed 2.2
+          run_case slalom --scenario maneuver --maneuver slalom --speed 1.8
+          run_case hard --scenario maneuver --maneuver hard-turn --speed 2.2
+          run_case attack --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 20 --pva-observation 10
+
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path("build/sad_lag_scan")
+          rows=[]
+          for p in sorted((root/"validation").glob("*.json")):
+              r=json.load(open(p)); d=r["detector"]
+              rows.append({
+                  "case":p.stem,
+                  "glrt_mean":d.get("glrt_mean"),
+                  "glrt_p95":d.get("glrt_p95"),
+                  "glrt_max":d.get("glrt_max"),
+                  "post_attack_glrt_mean":d.get("post_attack_glrt_mean"),
+                  "post_attack_glrt_max":d.get("post_attack_glrt_max"),
+              })
+          summary={"fit":json.load(open(root/"fit.json")),"validation":rows}
+          (root/"summary.json").write_text(json.dumps(summary,indent=2)+"\n")
+          print(json.dumps(summary,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sad-dynamic-lag-${{ matrix.lag_ms }}
+          path: build/sad_lag_scan
+          retention-days: 5
