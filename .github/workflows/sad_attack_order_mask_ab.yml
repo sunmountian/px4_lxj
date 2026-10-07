@@ -1,0 +1,80 @@
+name: Sensor Attack Detector Attack Order Mask AB
+
+on:
+  push:
+    branches:
+      - sad-v2-fixed-model
+    paths:
+      - '.github/workflows/sad_attack_order_mask_ab.yml'
+
+jobs:
+  mask-ab:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+      - name: Prepare environment
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+      - name: Run order-mask AB
+        run: |
+          set -eux
+          OUT=build/sad_order_mask_ab
+          mkdir -p "$OUT"
+          COMMON="--thr-map 0 --thr-gain 3.47118998 --normal-scale-mean -0.33720698952674866 --normal-dynamic-mean 0.42821773886680603 --weight-acceleration 142.17990926253765 --weight-velocity 71.20519081577794 --weight-position 50.66817247677383 --glrt-mean 0 --glrt-sd 1 --threshold 1000000"
+
+          run_case () {
+            LABEL="$1"; MASK="$2"; shift 2
+            MARKER=$(mktemp)
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py "$@" --attack-mask "$MASK" $COMMON
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -name result.json -type f -newer "$MARKER" | head -n 1)
+            rm -f "$MARKER"
+            test -n "$RESULT"
+            cp "$RESULT" "$OUT/${LABEL}.json"
+          }
+
+          for MASK in 1 6 7; do
+            run_case slalom_m${MASK} "$MASK" --scenario maneuver --maneuver slalom --speed 1.8
+            run_case hard_m${MASK} "$MASK" --scenario maneuver --maneuver hard-turn --speed 2.2
+            run_case atk20_m${MASK} "$MASK" --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 20 --pva-observation 10
+            run_case atk40_m${MASK} "$MASK" --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 40 --pva-observation 20
+          done
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path("build/sad_order_mask_ab")
+          rows=[]
+          for p in sorted(root.glob("*.json")):
+              if p.name=="summary.json":
+                  continue
+              r=json.load(open(p)); d=r["detector"]
+              rows.append({
+                  "case":p.stem,
+                  "mask":r["parameters"].get("SAD_ATK_MASK"),
+                  "glrt_mean":d.get("glrt_mean"),
+                  "glrt_p95":d.get("glrt_p95"),
+                  "glrt_max":d.get("glrt_max"),
+                  "pre_attack_glrt_mean":d.get("pre_attack_glrt_mean"),
+                  "post_attack_glrt_mean":d.get("post_attack_glrt_mean"),
+                  "post_attack_glrt_max":d.get("post_attack_glrt_max"),
+              })
+          (root/"summary.json").write_text(json.dumps(rows,indent=2)+"\n")
+          print(json.dumps(rows,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sad-attack-order-mask-ab
+          path: build/sad_order_mask_ab
+          retention-days: 5
