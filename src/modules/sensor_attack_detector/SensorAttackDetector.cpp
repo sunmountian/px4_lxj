@@ -635,6 +635,69 @@ bool SensorAttackDetector::integrateActuator(uint64_t start_timestamp, uint64_t 
 	return true;
 }
 
+bool SensorAttackDetector::integrateGpsVelocity(uint64_t start_timestamp, uint64_t end_timestamp,
+		float (&velocity_integral)[2], float (&position_integral)[2], float &covered_time_s) const
+{
+	velocity_integral[0] = 0.f;
+	velocity_integral[1] = 0.f;
+	position_integral[0] = 0.f;
+	position_integral[1] = 0.f;
+	covered_time_s = 0.f;
+
+	if ((end_timestamp <= start_timestamp) || _gps_buffer.empty()
+	    || (start_timestamp < _gps_buffer.front().timestamp)
+	    || (end_timestamp > _gps_buffer.back().timestamp)) {
+		return false;
+	}
+
+	GpsEvent lower{};
+
+	if (!interpolateGps(start_timestamp, lower)) {
+		return false;
+	}
+
+	uint64_t segment_start = start_timestamp;
+	const float total_time_s = static_cast<float>(end_timestamp - start_timestamp) * 1e-6f;
+
+	for (size_t i = 0; i < _gps_buffer.size() && segment_start < end_timestamp; ++i) {
+		const GpsEvent &event = _gps_buffer[i];
+
+		if (event.timestamp <= segment_start) {
+			continue;
+		}
+
+		const uint64_t segment_end = event.timestamp < end_timestamp ? event.timestamp : end_timestamp;
+		GpsEvent upper{};
+
+		if (segment_end == event.timestamp) {
+			upper = event;
+
+		} else if (!interpolateGps(segment_end, upper)) {
+			return false;
+		}
+
+		const float duration_s = static_cast<float>(segment_end - segment_start) * 1e-6f;
+		const float start_s = static_cast<float>(segment_start - start_timestamp) * 1e-6f;
+		const float time_to_end_s = total_time_s - start_s;
+
+		for (size_t axis = 0; axis < 2; ++axis) {
+			const float v0 = lower.velocity[axis];
+			const float dv = upper.velocity[axis] - v0;
+			velocity_integral[axis] += 0.5f * duration_s * (v0 + upper.velocity[axis]);
+			position_integral[axis] += v0 * (time_to_end_s * duration_s
+						 - 0.5f * duration_s * duration_s)
+					 + dv * (0.5f * time_to_end_s * duration_s
+						 - duration_s * duration_s / 3.f);
+		}
+
+		covered_time_s += duration_s;
+		segment_start = segment_end;
+		lower = upper;
+	}
+
+	return segment_start == end_timestamp;
+}
+
 bool SensorAttackDetector::interpolateActuatorAcceleration(uint64_t timestamp, float (&acceleration)[2]) const
 {
 	if (_imu_buffer.empty() || (timestamp < _imu_buffer.front().timestamp)
@@ -761,23 +824,36 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 
 		const float tau = static_cast<float>(center_timestamp - start_timestamp)
 				  / static_cast<float>(kWindowDurationUs);
+		const float drag_rate = fmaxf(_param_sad_drag.get(), 0.f);
 		float attack_basis[AttackBasis::kSize] {};
+		float attack_integral[AttackBasis::kSize] {};
 		AttackBasis::evaluate(tau, attack_basis);
+		AttackBasis::evaluateIntegral(tau, attack_integral);
+		GpsEvent gps_at_sample{};
 		float delayed_acceleration[2] {};
 
-		if (!interpolateActuatorAcceleration(center_timestamp - kDynamicLagUs, delayed_acceleration)) {
+		if (!interpolateActuatorAcceleration(center_timestamp - kDynamicLagUs, delayed_acceleration)
+		    || !interpolateGps(center_timestamp, gps_at_sample)) {
 			_data_quality_flags |= sensor_attack_status_s::DATA_QUALITY_WINDOW_COVERAGE;
 			return false;
+		}
+
+		for (size_t coefficient = 0; coefficient < AttackBasis::kSize; ++coefficient) {
+			// q + c * Iq. Any unknown attack velocity at the window
+			// start contributes only a constant and is absorbed by H0 bias.
+			attack_basis[coefficient] += drag_rate * window_s * attack_integral[coefficient];
 		}
 
 		const float north_dynamic_basis = event.acceleration_actuator[0] - delayed_acceleration[0];
 		const float east_dynamic_basis = event.acceleration_actuator[1] - delayed_acceleration[1];
 		const float north_residual = event.acceleration_measured[0] - event.acceleration_actuator[0]
 					     - _param_sad_as_mu.get() * event.acceleration_actuator[0]
-					     - _param_sad_ad_mu.get() * north_dynamic_basis;
+					     - _param_sad_ad_mu.get() * north_dynamic_basis
+					     + drag_rate * gps_at_sample.velocity[0];
 		const float east_residual = event.acceleration_measured[1] - event.acceleration_actuator[1]
 					    - _param_sad_as_mu.get() * event.acceleration_actuator[1]
-					    - _param_sad_ad_mu.get() * east_dynamic_basis;
+					    - _param_sad_ad_mu.get() * east_dynamic_basis
+					    + drag_rate * gps_at_sample.velocity[1];
 		const float north_normal_basis[AxisGlrtAccumulator::kNormalDim] {1.f};
 		const float east_normal_basis[AxisGlrtAccumulator::kNormalDim] {1.f};
 		north_accumulator.addObservation(north_residual, acceleration_weight, north_normal_basis, attack_basis,
@@ -812,14 +888,36 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 			return false;
 		}
 
+		float drag_velocity_integral[2] {};
+		float drag_position_integral[2] {};
+		float drag_covered_time_s = 0.f;
+
+		if (!integrateGpsVelocity(start_timestamp, event.timestamp, drag_velocity_integral,
+					 drag_position_integral, drag_covered_time_s)
+		    || (drag_covered_time_s + static_cast<float>(kMaximumWindowGapUs) * 1e-6f < elapsed_s)) {
+			_data_quality_flags |= sensor_attack_status_s::DATA_QUALITY_WINDOW_COVERAGE;
+			return false;
+		}
+
+		const float drag_rate = fmaxf(_param_sad_drag.get(), 0.f);
+		float first_integral_basis[AttackBasis::kSize] {};
+		float second_integral_basis[AttackBasis::kSize] {};
+		float third_integral_basis[AttackBasis::kSize] {};
 		float velocity_basis[AttackBasis::kSize] {};
 		float position_basis[AttackBasis::kSize] {};
-		AttackBasis::evaluateIntegral(tau, velocity_basis);
-		AttackBasis::evaluateDoubleIntegral(tau, position_basis);
+		AttackBasis::evaluateIntegral(tau, first_integral_basis);
+		AttackBasis::evaluateDoubleIntegral(tau, second_integral_basis);
+		AttackBasis::evaluateTripleIntegral(tau, third_integral_basis);
 
 		for (size_t coefficient = 0; coefficient < AttackBasis::kSize; ++coefficient) {
-			velocity_basis[coefficient] *= window_s;
-			position_basis[coefficient] *= window_s * window_s;
+			const float first = window_s * first_integral_basis[coefficient];
+			const float second = window_s * window_s * second_integral_basis[coefficient];
+			const float third = window_s * window_s * window_s * third_integral_basis[coefficient];
+			// Iv + c * I2v, and I2v + c * I3v. The contribution
+			// from unknown attack velocity at the window start has exactly
+			// the H0 t / 0.5 t^2 shape and is therefore a nuisance mode.
+			velocity_basis[coefficient] = first + drag_rate * second;
+			position_basis[coefficient] = second + drag_rate * third;
 		}
 
 		for (size_t axis = 0; axis < 2; ++axis) {
@@ -827,11 +925,13 @@ bool SensorAttackDetector::evaluateWindow(uint64_t end_timestamp,
 			const float dynamic_position_basis = delta_position[axis] - delayed_delta_position[axis];
 			const float velocity_residual = event.velocity[axis] - gps_start.velocity[axis] - delta_velocity[axis]
 							- _param_sad_as_mu.get() * delta_velocity[axis]
-							- _param_sad_ad_mu.get() * dynamic_velocity_basis;
+							- _param_sad_ad_mu.get() * dynamic_velocity_basis
+							+ drag_rate * drag_velocity_integral[axis];
 			const float position_residual = event.position[axis] - gps_start.position[axis]
 							- elapsed_s * gps_start.velocity[axis] - delta_position[axis]
 							- _param_sad_as_mu.get() * delta_position[axis]
-							- _param_sad_ad_mu.get() * dynamic_position_basis;
+							- _param_sad_ad_mu.get() * dynamic_position_basis
+							+ drag_rate * drag_position_integral[axis];
 			const float velocity_normal_basis[AxisGlrtAccumulator::kNormalDim] {elapsed_s};
 			const float position_normal_basis[AxisGlrtAccumulator::kNormalDim] {
 				0.5f * elapsed_s * elapsed_s
