@@ -280,9 +280,34 @@ SteadyAttackProfile steady_attack_profile(hrt_abstime now_us)
 	const SteadyAttackState &state = steady_attack_state();
 	const float ramp_s = math::max(0.001f, steady_attack_float("PX4_STEADY_ATTACK_RAMP_S", 30.f));
 	profile.phase = static_cast<float>(now_us - state.active_start_us) * 1e-6f / ramp_s;
-	profile.position_scale = smoother_step(profile.phase);
-	profile.velocity_scale = smoother_step_derivative(profile.phase) / ramp_s;
-	profile.acceleration_scale = smoother_step_second_derivative(profile.phase) / (ramp_s * ramp_s);
+	const char *profile_name = std::getenv("PX4_STEADY_ATTACK_PROFILE");
+	const bool sinusoidal_profile = profile_name != nullptr && std::strcmp(profile_name, "sinusoidal") == 0;
+
+	if (sinusoidal_profile) {
+		static constexpr float pi = 3.14159265358979323846f;
+		const float phase = math::constrain(profile.phase, 0.f, 1.f);
+
+		if (profile.phase <= 0.f) {
+			profile.position_scale = 0.f;
+			profile.velocity_scale = 0.f;
+			profile.acceleration_scale = 0.f;
+
+		} else if (profile.phase >= 1.f) {
+			profile.position_scale = 1.f;
+			profile.velocity_scale = 0.f;
+			profile.acceleration_scale = 0.f;
+
+		} else {
+			profile.position_scale = phase - sinf(2.f * pi * phase) / (2.f * pi);
+			profile.velocity_scale = (1.f - cosf(2.f * pi * phase)) / ramp_s;
+			profile.acceleration_scale = 2.f * pi * sinf(2.f * pi * phase) / (ramp_s * ramp_s);
+		}
+
+	} else {
+		profile.position_scale = smoother_step(profile.phase);
+		profile.velocity_scale = smoother_step_derivative(profile.phase) / ramp_s;
+		profile.acceleration_scale = smoother_step_second_derivative(profile.phase) / (ramp_s * ramp_s);
+	}
 
 	const float north_target_m = steady_attack_float("PX4_STEADY_ATTACK_NORTH_M", 5.f);
 	const float east_target_m = steady_attack_float("PX4_STEADY_ATTACK_EAST_M", 0.f);
