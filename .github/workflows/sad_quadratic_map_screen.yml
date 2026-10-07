@@ -1,0 +1,91 @@
+name: Sensor Attack Detector Quadratic Map Screen
+
+on:
+  push:
+    branches:
+      - sad-v2-quadratic-actuator
+    paths:
+      - '.github/workflows/sad_quadratic_map_screen.yml'
+
+concurrency:
+  group: sad-quadratic-map-screen
+  cancel-in-progress: true
+
+jobs:
+  screen:
+    runs-on: ubuntu-latest
+    container:
+      image: px4io/px4-dev-simulation-focal:2021-09-08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Prepare environment
+        run: |
+          set -eux
+          git tag -f v1.13.0-0.0.1-dev HEAD
+          git -C platforms/nuttx/NuttX/nuttx fetch --tags --force
+          python3 -m pip install --disable-pip-version-check pyulog pymavlink numpy
+          make px4_sitl_default
+          make px4_sitl_default sitl_gazebo
+
+      - name: Screen quadratic actuator map
+        run: |
+          set -eux
+          OUT=build/sad_quadratic_screen
+          rm -rf build/sad_v2_smoke "$OUT"
+          mkdir -p "$OUT"
+          BASE="--thr-gain 3.84 --normal-scale-mean 0 --normal-scale-sd 1 --normal-dynamic-sd 1 --weight-acceleration 142.17990926253765 --weight-velocity 71.20519081577794 --weight-position 50.66817247677383 --glrt-mean 0 --glrt-sd 1 --threshold 1000000 --cusum-drift 0.5 --consecutive 3"
+
+          run_one () {
+            LABEL="$1"; BETA="$2"; shift 2
+            MARKER=$(mktemp)
+            touch "$MARKER"
+            python3 Tools/sensor_attack_detector/run_v2_smoke.py "$@"               --normal-dynamic-mean "$BETA" $BASE
+            RESULT=$(find build/sad_v2_smoke -maxdepth 2 -name result.json -type f -newer "$MARKER" | head -n 1)
+            rm -f "$MARKER"
+            test -n "$RESULT"
+            cp "$RESULT" "$OUT/${LABEL}.json"
+          }
+
+          for BETA in 0.0 0.1 0.2 0.4; do
+            TAG=$(echo "$BETA" | tr '.' 'p')
+            run_one "beta_${TAG}_accel" "$BETA" --scenario maneuver --maneuver accel --speed 2.2
+            run_one "beta_${TAG}_slalom" "$BETA" --scenario maneuver --maneuver slalom --speed 1.8
+            run_one "beta_${TAG}_hard" "$BETA" --scenario maneuver --maneuver hard-turn --speed 2.2
+            run_one "beta_${TAG}_attack" "$BETA" --scenario pva-hover --pva-north 100 --pva-east 0 --pva-ramp 20 --pva-observation 10
+          done
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path("build/sad_quadratic_screen")
+          rows=[]
+          for p in sorted(root.glob("*.json")):
+              if p.name=="summary.json":
+                  continue
+              r=json.load(open(p)); d=r["detector"]
+              rows.append({
+                  "case":p.stem,
+                  "scenario":r["scenario"],
+                  "glrt_mean":d.get("glrt_mean"),
+                  "glrt_p95":d.get("glrt_p95"),
+                  "glrt_max":d.get("glrt_max"),
+                  "pre_attack_glrt_mean":d.get("pre_attack_glrt_mean"),
+                  "post_attack_glrt_mean":d.get("post_attack_glrt_mean"),
+                  "post_attack_glrt_max":d.get("post_attack_glrt_max"),
+                  "post_attack_alert_count":d.get("post_attack_alert_count"),
+              })
+          (root/"summary.json").write_text(json.dumps(rows,indent=2)+"\n")
+          print(json.dumps(rows,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sad-quadratic-map-screen
+          path: build/sad_quadratic_screen
+          retention-days: 5
